@@ -1,69 +1,297 @@
+---
+name: file-swarm
+description: Use file-swarm to run Codex-controlled, OpenAI-compatible, file-level coding swarms. Trigger when a coding task should be split into guarded patch workers, when the user asks for multi-model or multi-slot cooperation, when Codex should generate hard_constraints.yaml/interface_contract.yaml, run file-swarm auto/preflight/smoke-test/summary/apply/repair, or inspect which model handled which task.
+---
+
 # file-swarm
 
-`file-swarm` supports any OpenAI-compatible model worker. Claude is optional, not required.
+Use `file-swarm` as a patch-only coding swarm controlled by Codex.
 
-## When to Use
+Core principle:
 
-Use `file-swarm` when a task should be split into guarded patches and handled by OpenAI-compatible workers under Codex supervision.
+```text
+Codex sets rules.
+Workers produce patches.
+file-swarm enforces guardrails.
+Tests validate.
+Codex decides whether to apply.
+```
 
-## Codex Lite Workflow
+Do not bypass Patch Guard by editing target repo files directly unless the user explicitly asks for manual implementation.
 
-1. Build `hard_constraints.yaml`.
-2. Build `interface_contract.yaml`.
-3. Run the orchestrator.
-4. Read the summary.
-5. Decide whether to apply the final patch.
+## Quick Start
 
-## `hard_constraints.yaml`
+Run from the target repository root:
 
-This file defines the worker sandbox at the policy level:
+```bash
+file-swarm init --repo .
+file-swarm preflight --repo .
+file-swarm codex-contract "<user task>" --repo .
+file-swarm auto "<user task>" --repo . --parallel 2 --dry-merge
+file-swarm summary --run <run_id> --for-codex
+```
 
-- allowed file scope
-- forbidden directories
-- dependency restrictions
-- patch format requirements
-- secret handling rules
+Apply only when `codex_summary.md` recommends it and guard reports passed:
 
-## `interface_contract.yaml`
+```bash
+file-swarm apply --run <run_id> --allow-dirty
+```
 
-This file defines behavior expectations for code shape, error handling, imports, tests, and documentation.
+Repair failed or rejected tasks:
 
-## Model Slot
+```bash
+file-swarm repair --run <run_id>
+```
 
-A model slot is a single provider connection identified by:
+## Live Checks
 
-- `base_url`
+Never call a live slot without a configured environment variable API key.
+
+```bash
+file-swarm preflight --repo . --live
+file-swarm smoke-test --repo . --live
+```
+
+Rules:
+
+- `preflight --live` sends `Reply with OK.` to enabled keyed slots.
+- `smoke-test --live` must receive a real unified diff patch from the provider.
+- Live smoke-test must fail if the model returns prose or non-diff text.
+- Never print or write full API keys; use fingerprints only.
+
+## Task Allocation
+
+Let `file-swarm` split tasks when possible. Prefer file-level task boundaries:
+
+- One task owns one coherent file or tightly coupled file group.
+- Keep `allowed_files` as small as possible.
+- Tests can be a separate task when they touch a dedicated test file.
+- UI/design text can be a separate task from domain logic.
+- Never let workers edit config, lockfiles, `.env`, dependencies, or unrelated files unless hard constraints explicitly allow it.
+
+Good task split:
+
+```text
+task_001 -> src/clicker_core.py       -> domain logic and safety rules
+task_002 -> src/clicker_ui.py         -> designed presentation helpers
+task_003 -> tests/test_clicker_*.py   -> behavior and integration tests
+```
+
+Avoid:
+
+```text
+task_001 -> entire repository
+task_002 -> package manager files
+task_003 -> duplicate ownership of task_001 files
+```
+
+## Model And Slot Assignment
+
+Model slots live in:
+
+```text
+.swarm/config/model_slots.yaml
+```
+
+Each enabled slot has:
+
+- `id`
+- `provider`
+- `base_url` or `base_url_env`
 - `api_key_env`
-- model allow-list
-- concurrency budget
+- `allowed_models`
+- `default_model`
 
-## Stateless Patch Worker
+Dispatch behavior:
 
-The default worker type in `file-swarm` is stateless and patch-only.
-It must not directly modify repository files.
+- `--parallel N` limits global worker concurrency.
+- A slot is leased before worker start.
+- Busy slots are skipped during selection.
+- One slot cannot serve two workers at the same time.
+- If no slot is free, tasks wait instead of reusing a busy slot.
 
-## OpenAI-compatible Worker Support
+## Showing Which Model Did What
 
-`file-swarm` supports any OpenAI-compatible Chat Completions API.
-Claude is optional, not required.
+After `auto`, inspect these files:
 
-## Visible Communication
+```text
+.swarm/runs/<run_id>/dispatch_report.json
+.swarm/runs/<run_id>/dispatch_report.md
+.swarm/runs/<run_id>/timeline.jsonl
+.swarm/runs/<run_id>/transcripts/task_xxx.meta.json
+.swarm/runs/<run_id>/codex_summary.md
+```
 
-Worker input, summaries, validation, and merge decisions should remain inspectable on disk.
+Report model/task mapping to the user in this shape:
 
-## Patch Guard
+```text
+task_001: src/clicker_core.py
+  slot: mock1
+  model: mock-model
+  provider: mock
+  status: passed
 
-Patch Guard rejects:
+task_002: src/clicker_ui.py
+  slot: nvidia_glm_slot
+  model: glm-...
+  provider: openai_compatible
+  status: passed
+```
 
-- out-of-scope edits
-- unauthorized file creation
-- direct secret exposure
-- dependency changes not allowed by policy
+Use `dispatch_report.json` as source of truth for:
 
-## Final Validation
+- `task_id`
+- `slot_id`
+- `model`
+- `provider`
+- `is_mock`
+- `status`
+- `modified_files`
+- `provider_ok`
+- `provider_error`
 
-Codex should only apply a final patch after reading:
+Use `timeline.jsonl` to verify:
 
-- the summary
-- the validation report
-- the guarded patch result
+- `slot_acquired`
+- `worker_started`
+- `worker_finished`
+- `slot_released`
+
+## Worker Input Requirements
+
+Every worker input must include:
+
+- user request
+- task id and task type
+- assigned files
+- allowed files
+- read-only context files
+- `hard_constraints.yaml`
+- `interface_contract.yaml`
+- repo map
+- instruction to return unified diff only
+
+Workers must not write files directly. They only return patches.
+
+## Patch Guard Rules
+
+Patch Guard must reject:
+
+- empty patches
+- patches outside `allowed_files`
+- `.env` or `.env.local`
+- `package.json`
+- `pyproject.toml`
+- `requirements.txt`
+- lockfiles
+- absolute paths
+- file deletions unless explicitly allowed
+- suspected secrets or API keys
+
+Only guard-passed patches can enter `final.patch`.
+
+## Codex Decision Checklist
+
+Before applying:
+
+- Read `.swarm/runs/<run_id>/codex_summary.md`.
+- Confirm `hard_constraints_loaded: yes`.
+- Confirm `interface_contract_loaded: yes`.
+- Confirm `guard_rejected_tasks: 0`.
+- Confirm `final_patch_generated: yes`.
+- Confirm `final_patch_empty: no`.
+- Confirm `recommend_apply: yes` or `yes_with_caution`.
+- Read `validation_report.md` if present.
+
+Do not apply when:
+
+- `recommend_apply: no`
+- guard rejected any task
+- final patch is empty
+- contracts were missing
+- merge conflict occurred
+- critical worker failed
+
+## Apply Safety
+
+Default apply requires a clean git worktree.
+
+```bash
+file-swarm apply --run <run_id>
+```
+
+Use `--allow-dirty` only when the user expects local changes:
+
+```bash
+file-swarm apply --run <run_id> --allow-dirty
+```
+
+`git apply` is the default method. Do not use fallback apply unless explicitly requested:
+
+```bash
+file-swarm apply --run <run_id> --allow-fallback-apply
+```
+
+After apply, inspect:
+
+```text
+.swarm/runs/<run_id>/apply_report.md
+.swarm/runs/<run_id>/validation_report.md
+```
+
+## Repair Loop
+
+Use repair when guard or validation failed:
+
+```bash
+file-swarm repair --run <run_id>
+file-swarm summary --run <run_id> --for-codex
+```
+
+Repair input must include:
+
+- original task
+- original patch
+- guard violation
+- validation error summary
+- hard constraints
+- interface contract
+
+If repair cannot run, it must write:
+
+```text
+repair_status: skipped
+reason: ...
+```
+
+or:
+
+```text
+repair_status: failed
+reason: ...
+```
+
+## Recommended User-Facing Report
+
+After a run, summarize:
+
+```text
+Run: <run_id>
+Mode: mock/live/mixed
+Tasks: <completed>/<total>
+Guard: <passed> passed, <rejected> rejected
+Models used: <model list>
+Slots used: <slot list>
+Modified files: <file list>
+Recommend apply: <yes/no/yes_with_caution>
+Reason: <summary reason>
+Next command: <apply/repair/summary command>
+```
+
+Then include a compact task table:
+
+```text
+task_id | file(s) | slot | model | provider | status
+```
+
+Never include API keys, bearer tokens, or raw provider credentials.
