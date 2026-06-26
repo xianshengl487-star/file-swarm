@@ -1,45 +1,73 @@
 model_slots:
-  - id: deepseek_slot_01
-    provider: openai_compatible
-    base_url: https://api.deepseek.com
-    api_key_env: DEEPSEEK_API_KEY_01
-    enabled: true
-    allowed_models:
-      - deepseek-chat
-      - deepseek-reasoner
-    default_model: deepseek-chat
-    max_concurrent_tasks: 1
-
-  - id: glm_slot_01
-    provider: openai_compatible
-    base_url: https://open.bigmodel.cn/api/paas/v4
-    api_key_env: GLM_API_KEY_01
-    enabled: true
-    allowed_models:
-      - glm-4-plus
-      - glm-4-air
-    default_model: glm-4-plus
-    max_concurrent_tasks: 1
-
-  - id: qwen_slot_01
-    provider: openai_compatible
-    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
-    api_key_env: QWEN_API_KEY_01
-    enabled: true
-    allowed_models:
-      - qwen3-coder-plus
-      - qwen-plus
-      - qwen-turbo
-    default_model: qwen3-coder-plus
-    max_concurrent_tasks: 1
-
   - id: mimo_slot_01
     provider: openai_compatible
-    base_url: https://example.com/v1
+    base_url: https://token-plan-cn.xiaomimimo.com/v1
     api_key_env: MIMO_API_KEY_01
-    enabled: false
+    enabled: true
     allowed_models:
-      - mimo-v2.5
       - mimo-v2.5-pro
-    default_model: mimo-v2.5
+      - mimo-v2.5
+    default_model: mimo-v2.5-pro
+    max_concurrent_tasks: 1
+
+  - id: nvidia_text_slot_01
+    provider: openai_compatible
+    base_url: https://integrate.api.nvidia.com/v1
+    api_key_env: NVIDIA_API_KEY_01
+    enabled: true
+    allowed_models:
+      - glm-5.1
+    default_model: glm-5.1
+    max_concurrent_tasks: 1
+
+  - id: nvidia_text_slot_02
+    provider: openai_compatible
+    base_url: https://integrate.api.nvidia.com/v1
+    api_key_env: NVIDIA_API_KEY_02
+    enabled: true
+    allowed_models:
+      - k2.6
+    default_model: k2.6
+    max_concurrent_tasks: 1
+
+  - id: nvidia_text_slot_03
+    provider: openai_compatible
+    base_url: https://integrate.api.nvidia.com/v1
+    api_key_env: NVIDIA_API_KEY_03
+    enabled: true
+    allowed_models:
+      - qwen3.5
+    default_model: qwen3.5
+    max_concurrent_tasks: 1
+
+  - id: nvidia_text_slot_04
+    provider: openai_compatible
+    base_url: https://integrate.api.nvidia.com/v1
+    api_key_env: NVIDIA_API_KEY_04
+    enabled: true
+    allowed_models:
+      - deepseek-v4
+    default_model: deepseek-v4
+    max_concurrent_tasks: 1
+
+  - id: nvidia_mm_slot_05
+    provider: openai_compatible
+    base_url: https://integrate.api.nvidia.com/v1
+    api_key_env: NVIDIA_API_KEY_05
+    enabled: true
+    allowed_models:
+      - nvidia-multimodal-1
+      - multimodal-1
+    default_model: nvidia-multimodal-1
+    max_concurrent_tasks: 1
+
+  - id: nvidia_mm_slot_06
+    provider: openai_compatible
+    base_url: https://integrate.api.nvidia.com/v1
+    api_key_env: NVIDIA_API_KEY_06
+    enabled: true
+    allowed_models:
+      - nvidia-multimodal-2
+      - multimodal-2
+    default_model: nvidia-multimodal-2
     max_concurrent_tasks: 1

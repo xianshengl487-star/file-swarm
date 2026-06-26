@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .lease_manager import LeaseManager
 from .models import ModelSlot
+from .model_router import ModelRouter
 from .patch_guard import guard_patch
 from .repo_scanner import scan_repo
 from .slot_registry import SlotRegistry
@@ -27,12 +28,28 @@ def _load_provider(slot: ModelSlot, registry: SlotRegistry):
     return OpenAICompatibleProvider(base_url=slot.base_url or "", api_key=api_key), "openai_compatible"
 
 
+def _select_slot(registry: SlotRegistry, router: ModelRouter | None, task_type: str) -> tuple[ModelSlot, str]:
+    enabled_slots = registry.list_enabled()
+    if not enabled_slots:
+        raise RuntimeError("no enabled slots available")
+    preferred_model = None
+    if router is not None:
+        preferred_model = router.preferred_model(task_type, enabled_slots[0].default_model)
+    for slot in enabled_slots:
+        if preferred_model and preferred_model in slot.allowed_models:
+            return slot, preferred_model
+    slot = enabled_slots[0]
+    return slot, slot.default_model
+
+
 def dispatch_run(state, tasks: list[PlannedTask] | None = None, registry: SlotRegistry | None = None) -> None:
     root = state.root
     state.ensure_dirs()
     if registry is None:
         registry_path = root / ".swarm" / "config" / "model_slots.yaml"
         registry = SlotRegistry.from_yaml(registry_path) if registry_path.exists() else SlotRegistry()
+    router_path = root / ".swarm" / "config" / "routing.yaml"
+    router = ModelRouter.from_yaml(router_path) if router_path.exists() else None
     tasks = tasks or split_tasks(scan_repo(root), state.user_request)
     lease = LeaseManager()
     patches_dir = state.run_dir / "patches"
@@ -41,24 +58,12 @@ def dispatch_run(state, tasks: list[PlannedTask] | None = None, registry: SlotRe
     guard_dir.mkdir(parents=True, exist_ok=True)
 
     for task in tasks:
-        slot = next(iter(registry.slots.values()), None)
-        if slot is None:
-            slot = ModelSlot(
-                id="mock_slot",
-                provider="mock",
-                base_url=None,
-                base_url_env=None,
-                api_key_env="",
-                enabled=True,
-                allowed_models=["mock-model"],
-                default_model="mock-model",
-            )
+        slot, model = _select_slot(registry, router, task.task_type)
         if not lease.can_acquire(slot.id, slot.max_concurrent_tasks):
             raise RuntimeError(f"slot {slot.id} is busy")
         lease.acquire(slot.id, slot.max_concurrent_tasks)
         try:
             provider, _ = _load_provider(slot, registry)
-            model = slot.default_model
             prompt = _read_example(root, "policy.example.yaml")
             messages = [{"role": "user", "content": f"{task.goal}\n\n{prompt}"}]
             output_text = asyncio.run(provider.chat(model=model, messages=messages))

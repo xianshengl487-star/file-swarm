@@ -119,6 +119,30 @@ Only guarded patches can move toward merge and application.
 pip install -e .
 ```
 
+## Configuration
+
+The repository uses environment-variable-based keys.
+
+Create the following environment variables locally:
+
+- `MIMO_API_KEY_01`
+- `NVIDIA_API_KEY_01`
+- `NVIDIA_API_KEY_02`
+- `NVIDIA_API_KEY_03`
+- `NVIDIA_API_KEY_04`
+- `NVIDIA_API_KEY_05`
+- `NVIDIA_API_KEY_06`
+
+You can use `.env.example` as a checklist, but do not commit real key values.
+
+The local slot registry lives at `.swarm/config/model_slots.yaml`.
+It now points to:
+
+- a Mimo slot at `https://token-plan-cn.xiaomimimo.com/v1`
+- NVIDIA-compatible slots at `https://integrate.api.nvidia.com/v1`
+
+If you want to activate them in PowerShell for the current session, set the variables manually in your shell before running `file-swarm preflight` or `file-swarm auto`.
+
 ## CLI
 
 ```bash
