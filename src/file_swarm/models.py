@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
 
 
 @dataclass(slots=True)
@@ -29,9 +31,33 @@ class ModelWorker:
 
 @dataclass(slots=True)
 class HardConstraints:
-    pass
+    scope: dict[str, Any] = field(default_factory=dict)
+    file_modification: dict[str, Any] = field(default_factory=dict)
+    dependencies: dict[str, Any] = field(default_factory=dict)
+    public_api: dict[str, Any] = field(default_factory=dict)
+    security: dict[str, Any] = field(default_factory=dict)
+    execution: dict[str, Any] = field(default_factory=dict)
+    validation: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
 class InterfaceContract:
-    pass
+    project_style: dict[str, Any] = field(default_factory=dict)
+    naming: dict[str, Any] = field(default_factory=dict)
+    error_handling: dict[str, Any] = field(default_factory=dict)
+    return_values: dict[str, Any] = field(default_factory=dict)
+    imports: dict[str, Any] = field(default_factory=dict)
+    testing: dict[str, Any] = field(default_factory=dict)
+    documentation: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class RepoScanResult:
+    root: Path
+    directories: list[str]
+    files: list[str]
+    source_dirs: list[str]
+    test_dirs: list[str]
+    config_files: list[str]
+    test_command: str | None
+    project_type: str
