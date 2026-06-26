@@ -54,7 +54,7 @@ def merge_patches(run_dir: Path) -> MergeResult:
     final_patch_path = run_dir / "final.patch"
 
     if not patch_paths:
-        merge_report_path.write_text("status: skipped\nreason: no guard-passed patches\n", encoding="utf-8")
+        merge_report_path.write_text("status: skipped\nreason: no guard-passed patches\n", encoding="utf-8", newline="\n")
         return MergeResult(False, False, None, merge_report_path, [], "no guard-passed patches")
 
     merged_parts: list[str] = []
@@ -75,6 +75,7 @@ def merge_patches(run_dir: Path) -> MergeResult:
                 )
                 + "\n",
                 encoding="utf-8",
+                newline="\n",
             )
             if final_patch_path.exists():
                 final_patch_path.unlink()
@@ -84,7 +85,7 @@ def merge_patches(run_dir: Path) -> MergeResult:
         merged_parts.append(patch_text.rstrip())
 
     merged_text = "\n".join(merged_parts).strip() + "\n"
-    final_patch_path.write_text(merged_text, encoding="utf-8")
+    final_patch_path.write_text(merged_text, encoding="utf-8", newline="\n")
     merge_report_path.write_text(
         "\n".join(
             [
@@ -95,5 +96,6 @@ def merge_patches(run_dir: Path) -> MergeResult:
         )
         + "\n",
         encoding="utf-8",
+        newline="\n",
     )
     return MergeResult(True, False, final_patch_path, merge_report_path, modified_files, "merged")

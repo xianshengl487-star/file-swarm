@@ -21,6 +21,11 @@ def test_demo_project_end_to_end(tmp_path: Path, monkeypatch) -> None:
         encoding="utf-8",
     )
     subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "core.autocrlf", "false"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "src/demo_math.py", "tests/test_demo_math.py"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=repo, check=True, capture_output=True, text=True)
     monkeypatch.chdir(repo)
 
     auto(task="Add subtract(a: int, b: int) -> int and add tests.", repo=".", parallel=2, dry_merge=True)
@@ -34,7 +39,7 @@ def test_demo_project_end_to_end(tmp_path: Path, monkeypatch) -> None:
     assert (run_dir / "guard_report.md").exists()
     assert (run_dir / "codex_summary.md").exists()
 
-    apply_run(run=run_id)
+    apply_run(run=run_id, allow_dirty=True, no_validate=False, allow_fallback_apply=False)
 
     proc = subprocess.run(["python", "-m", "pytest", "-q"], cwd=repo, capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stdout + proc.stderr

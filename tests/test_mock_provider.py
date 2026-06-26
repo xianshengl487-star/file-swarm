@@ -13,8 +13,10 @@ def test_mock_provider_demo_patch_is_valid() -> None:
         "- tests/test_demo_math.py\n"
         "USER_REQUEST: Add subtract(a: int, b: int) -> int and add tests.\n"
     )
-    output = asyncio.run(provider.chat("mock-model", [{"role": "user", "content": prompt}]))
+    result = asyncio.run(provider.chat("mock-model", [{"role": "user", "content": prompt}]))
+    output = result.text
 
+    assert result.ok
     assert "src/demo_math.py" in output
     assert "tests/test_demo_math.py" in output
 

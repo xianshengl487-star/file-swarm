@@ -98,7 +98,6 @@ The project is designed to work with any OpenAI-compatible Chat Completions API,
 - Qwen
 - Kimi
 - MiniMax
-- Claude
 - Gemini
 - OpenAI-compatible proxies
 - LiteLLM
@@ -200,6 +199,7 @@ file-swarm merge
 file-swarm auto
 file-swarm summary
 file-swarm apply
+file-swarm repair
 ```
 
 Example workflow:
@@ -212,6 +212,14 @@ file-swarm auto "实现登录模块" --repo . --parallel 8 --dry-merge
 file-swarm summary --for-codex
 file-swarm apply --run <run_id>
 ```
+
+## Stable Pre-Live Behavior
+
+- Multi-slot dispatch leases a slot before worker start, skips busy slots, respects `--parallel N`, and writes `slot_acquired`, `worker_started`, `worker_finished`, and `slot_released` events to `timeline.jsonl`.
+- `file-swarm smoke-test --repo . --live` never fabricates a passing patch from local fallback output. Live mode must receive a real unified diff from the configured provider.
+- `file-swarm apply --run <run_id>` requires a non-empty `final.patch`, passed guard reports, and a clean git worktree unless `--allow-dirty` is supplied. `git apply` is the default path; custom fallback requires `--allow-fallback-apply`.
+- `file-swarm summary --run <run_id> --for-codex` writes `codex_summary.md` with slots, models, modified files, guard status, validation/apply status, repair need, and `recommend_apply`.
+- `file-swarm repair --run <run_id>` creates repair inputs for rejected or failed tasks, includes both contracts, asks a provider for a corrected patch, reruns Patch Guard, and writes `repair_report.md`.
 
 ## Command Output Philosophy
 

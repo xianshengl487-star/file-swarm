@@ -13,9 +13,11 @@ from .dispatcher import dispatch_run, guard_run, write_auto_summary
 from .patch_apply import apply_patch_text
 from .patch_merger import merge_patches
 from .preflight_checker import run_preflight, run_smoke_test
+from .repair import repair_run
 from .repo_scanner import scan_repo
 from .run_state import RunState
 from .slot_registry import SlotRegistry
+from .summary import write_codex_summary
 from .task_planner import build_plan, split_tasks
 from .transcript_logger import write_json, write_text
 from .validators import render_validation_report, run_validation
@@ -215,24 +217,204 @@ def auto(
 def summary(run: str = typer.Option(..., "--run"), for_codex: bool = typer.Option(False, "--for-codex")) -> None:
     root = Path.cwd()
     state = RunState.load(root, run)
-    summary_path = state.run_dir / "codex_summary.md"
-    if not summary_path.exists():
-        raise typer.BadParameter("codex_summary.md not found")
+    summary_path = write_codex_summary(state) if for_codex or not (state.run_dir / "codex_summary.md").exists() else state.run_dir / "codex_summary.md"
     console.print(summary_path.read_text(encoding="utf-8"))
 
 
 @app.command()
-def apply(run: str = typer.Option(..., "--run")) -> None:
+def repair(run: str = typer.Option(..., "--run")) -> None:
+    root = Path.cwd()
+    state = RunState.load(root, run)
+    report_path = repair_run(state)
+    console.print(report_path.read_text(encoding="utf-8"))
+
+
+def _read_guard_rows(run_dir: Path) -> list[dict]:
+    rows: list[dict] = []
+    for path in sorted((run_dir / "guard_reports").glob("*.guard.json")):
+        rows.append(json.loads(path.read_text(encoding="utf-8")))
+    return rows
+
+
+def _git_status(root: Path) -> tuple[bool, str, str]:
+    proc = subprocess.run(["git", "status", "--porcelain"], cwd=root, capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        return False, "not_git_repo", proc.stderr.strip()
+    return proc.stdout.strip() == "", proc.stdout.strip() or "clean", ""
+
+
+def _as_bool(value) -> bool:
+    return value if isinstance(value, bool) else bool(getattr(value, "default", False))
+
+
+def _write_apply_report(
+    state: RunState,
+    *,
+    patch_path: Path,
+    guard_status: str,
+    git_clean_status: str,
+    allow_dirty: bool,
+    patch_applied: bool,
+    apply_method: str,
+    validation_status: str,
+    reason: str = "",
+) -> None:
+    write_text(
+        state.run_dir / "apply_report.md",
+        "\n".join(
+            [
+                f"run_id: {state.run_id}",
+                f"final_patch_path: {patch_path}",
+                f"guard_status: {guard_status}",
+                f"git_clean_status: {git_clean_status}",
+                f"allow_dirty_used: {str(allow_dirty).lower()}",
+                f"patch_applied: {str(patch_applied).lower()}",
+                f"apply_method: {apply_method}",
+                f"validation_status: {validation_status}",
+                f"reason: {reason or 'none'}",
+            ]
+        )
+        + "\n",
+    )
+
+
+@app.command()
+def apply(
+    run: str = typer.Option(..., "--run"),
+    allow_dirty: bool = typer.Option(False, "--allow-dirty"),
+    no_validate: bool = typer.Option(False, "--no-validate"),
+    allow_fallback_apply: bool = typer.Option(False, "--allow-fallback-apply"),
+) -> None:
+    allow_dirty = _as_bool(allow_dirty)
+    no_validate = _as_bool(no_validate)
+    allow_fallback_apply = _as_bool(allow_fallback_apply)
     root = Path.cwd()
     state = RunState.load(root, run)
     patch_path = state.run_dir / "final.patch"
     if not patch_path.exists():
+        _write_apply_report(
+            state,
+            patch_path=patch_path,
+            guard_status="unknown",
+            git_clean_status="unknown",
+            allow_dirty=allow_dirty,
+            patch_applied=False,
+            apply_method="failed",
+            validation_status="not_run",
+            reason="final.patch not found",
+        )
+        write_codex_summary(state)
         raise typer.BadParameter("final.patch not found")
+    if not patch_path.read_text(encoding="utf-8", errors="replace").strip():
+        _write_apply_report(
+            state,
+            patch_path=patch_path,
+            guard_status="unknown",
+            git_clean_status="unknown",
+            allow_dirty=allow_dirty,
+            patch_applied=False,
+            apply_method="failed",
+            validation_status="not_run",
+            reason="final.patch empty",
+        )
+        write_codex_summary(state)
+        raise typer.BadParameter("final.patch empty")
+
+    guard_report = state.run_dir / "guard_report.md"
+    rows = _read_guard_rows(state.run_dir)
+    guard_ok = guard_report.exists() and rows and all(row.get("passed") for row in rows)
+    if not guard_ok:
+        _write_apply_report(
+            state,
+            patch_path=patch_path,
+            guard_status="rejected",
+            git_clean_status="unknown",
+            allow_dirty=allow_dirty,
+            patch_applied=False,
+            apply_method="failed",
+            validation_status="not_run",
+            reason="guard report missing or rejected",
+        )
+        write_codex_summary(state)
+        raise typer.BadParameter("guard report missing or rejected")
+
+    clean, status_text, git_error = _git_status(root)
+    git_clean_status = "clean" if clean else status_text
+    if git_clean_status == "not_git_repo":
+        write_text(state.run_dir / "before_apply.diff", f"git diff unavailable: {git_error or 'not a git repository'}\n")
+        if not allow_dirty:
+            _write_apply_report(
+                state,
+                patch_path=patch_path,
+                guard_status="passed",
+                git_clean_status="not_git_repo",
+                allow_dirty=allow_dirty,
+                patch_applied=False,
+                apply_method="failed",
+                validation_status="not_run",
+                reason="not a git repository; pass --allow-dirty to continue",
+            )
+            write_codex_summary(state)
+            raise typer.BadParameter("not a git repository; pass --allow-dirty to continue")
+    else:
+        diff_proc = subprocess.run(["git", "diff"], cwd=root, capture_output=True, text=True, check=False)
+        write_text(state.run_dir / "before_apply.diff", diff_proc.stdout)
+        if not clean and not allow_dirty:
+            _write_apply_report(
+                state,
+                patch_path=patch_path,
+                guard_status="passed",
+                git_clean_status=git_clean_status,
+                allow_dirty=allow_dirty,
+                patch_applied=False,
+                apply_method="failed",
+                validation_status="not_run",
+                reason="worktree dirty",
+            )
+            write_codex_summary(state)
+            raise typer.BadParameter("worktree dirty; pass --allow-dirty to continue")
+
+    applied = False
+    method = "git apply"
     try:
         subprocess.run(["git", "apply", str(patch_path)], check=True, cwd=root)
-    except subprocess.CalledProcessError:
+        applied = True
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        if not allow_fallback_apply:
+            _write_apply_report(
+                state,
+                patch_path=patch_path,
+                guard_status="passed",
+                git_clean_status=git_clean_status,
+                allow_dirty=allow_dirty,
+                patch_applied=False,
+                apply_method="failed",
+                validation_status="not_run",
+                reason=f"git apply failed: {type(exc).__name__}",
+            )
+            write_codex_summary(state)
+            raise typer.BadParameter("git apply failed; pass --allow-fallback-apply for custom fallback")
         apply_patch_text(root, patch_path)
-    validation_result = run_validation(root, apply_mode=True)
-    write_text(state.run_dir / "validation_report.md", render_validation_report(validation_result))
+        applied = True
+        method = "fallback"
+
+    validation_status = "skipped"
+    validation_text = "status: skipped\nreason: --no-validate\n"
+    if not no_validate:
+        validation_result = run_validation(root, apply_mode=True)
+        validation_status = validation_result.status
+        validation_text = render_validation_report(validation_result)
+        write_text(state.run_dir / "validation_report.md", validation_text)
+    _write_apply_report(
+        state,
+        patch_path=patch_path,
+        guard_status="passed",
+        git_clean_status=git_clean_status,
+        allow_dirty=allow_dirty,
+        patch_applied=applied,
+        apply_method=method,
+        validation_status=validation_status,
+    )
+    write_codex_summary(state)
     console.print(f"applied: {patch_path}")
-    console.print(render_validation_report(validation_result))
+    console.print(validation_text)

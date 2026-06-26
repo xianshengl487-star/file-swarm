@@ -12,13 +12,15 @@ from .models import ModelSlot, TaskResult
 from .model_router import ModelRouter
 from .patch_guard import guard_patch
 from .patch_merger import MergeResult, merge_patches
+from .providers.base import ProviderResult
 from .providers.mock_provider import MockProvider
 from .providers.openai_compatible_provider import OpenAICompatibleProvider
 from .repo_scanner import scan_repo
 from .run_state import RunState
 from .slot_registry import SlotRegistry
+from .summary import write_codex_summary
 from .task_planner import PlannedTask, build_plan, split_tasks
-from .transcript_logger import log_worker_call, write_json, write_text
+from .transcript_logger import append_timeline_event, log_worker_call, write_json, write_text
 from .validators import ValidationResult, render_validation_report, run_validation
 
 
@@ -121,18 +123,44 @@ def _build_worker_input(
     )
 
 
-def _select_slot(registry: SlotRegistry, router: ModelRouter | None, task_type: str) -> tuple[ModelSlot, str | None]:
+def _candidate_models(registry: SlotRegistry, router: ModelRouter | None, task_type: str) -> list[str]:
     enabled_slots = registry.list_enabled()
     if not enabled_slots:
         raise RuntimeError("no enabled slots available")
-    preferred_model = router.preferred_model(task_type, enabled_slots[0].default_model) if router else None
-    if preferred_model:
-        matching = registry.list_enabled_for_model(preferred_model)
-        if matching:
-            for slot in matching:
-                if slot.max_concurrent_tasks > 0:
-                    return slot, preferred_model
-    return enabled_slots[0], enabled_slots[0].default_model
+    models: list[str] = []
+    if router:
+        preferred = router.routing.get(task_type, [])
+        models.extend(preferred)
+    models.extend(slot.default_model for slot in enabled_slots)
+    for slot in enabled_slots:
+        models.extend(slot.allowed_models)
+    return list(dict.fromkeys(model for model in models if model))
+
+
+def _slot_has_key_or_mock(slot: ModelSlot, registry: SlotRegistry) -> bool:
+    return slot.provider == "mock" or bool(registry.env_value(slot.api_key_env))
+
+
+async def _acquire_available_slot(
+    task: PlannedTask,
+    registry: SlotRegistry,
+    router: ModelRouter | None,
+    lease_manager: LeaseManager,
+) -> tuple[ModelSlot, str]:
+    candidate_models = _candidate_models(registry, router, task.task_type)
+    while True:
+        for model in candidate_models:
+            for slot in registry.list_enabled_for_model(model):
+                if not slot.enabled or slot.max_concurrent_tasks <= 0:
+                    continue
+                if not _slot_has_key_or_mock(slot, registry):
+                    continue
+                if lease_manager.is_leased(slot.id):
+                    continue
+                acquired = await lease_manager.try_acquire(slot.id, task_id=task.task_id, max_concurrent_tasks=1)
+                if acquired:
+                    return slot, model
+        await asyncio.sleep(0.05)
 
 
 def _provider_for_slot(slot: ModelSlot, registry: SlotRegistry):
@@ -141,6 +169,12 @@ def _provider_for_slot(slot: ModelSlot, registry: SlotRegistry):
     if slot.provider == "mock" or not api_key:
         return MockProvider(), "mock", None
     return OpenAICompatibleProvider(base_url=base_url, api_key=api_key), "openai_compatible", api_key
+
+
+def _coerce_provider_result(result: ProviderResult | str, model: str, provider: str) -> ProviderResult:
+    if isinstance(result, ProviderResult):
+        return result
+    return ProviderResult(ok=True, text=str(result), model=model, provider=provider)
 
 
 def _ensure_dispatch_registry(registry: SlotRegistry) -> SlotRegistry:
@@ -174,7 +208,12 @@ async def _run_task(
     timeout_seconds: float,
 ) -> TaskResult:
     async with global_sem:
-        slot, model = _select_slot(registry, router, task.task_type)
+        slot, model = await _acquire_available_slot(task, registry, router, lease_manager)
+        append_timeline_event(
+            state.run_dir,
+            "slot_acquired",
+            {"task_id": task.task_id, "slot_id": slot.id, "model": model, "provider": slot.provider},
+        )
         worker_input = _build_worker_input(state, task, scan_repo(state.root), hard_constraints_yaml, interface_contract_yaml, repo_map)
         prompt = worker_input
         patches_dir = state.run_dir / "patches"
@@ -183,21 +222,45 @@ async def _run_task(
         patch_path = patches_dir / f"{task.task_id}.patch"
         provider, provider_name, api_key = _provider_for_slot(slot, registry)
 
-        async with lease_manager.hold(slot.id, 1):
-            start_prompt = prompt
-            status = "passed"
-            error: str | None = None
-            output_text = ""
-            modified_files: list[str] = []
-            try:
-                output_text = await asyncio.wait_for(
+        start_prompt = prompt
+        status = "passed"
+        error: str | None = None
+        output_text = ""
+        modified_files: list[str] = []
+        provider_result = ProviderResult(ok=False, error="not_started", model=model, provider=provider_name)
+        try:
+            append_timeline_event(
+                state.run_dir,
+                "worker_started",
+                {"task_id": task.task_id, "slot_id": slot.id, "model": model, "provider": provider_name},
+            )
+            provider_result = _coerce_provider_result(
+                await asyncio.wait_for(
                     provider.chat(
                         model=model or slot.default_model,
                         messages=[{"role": "user", "content": prompt}],
                         max_tokens=2048,
                     ),
                     timeout=timeout_seconds,
+                ),
+                model or slot.default_model,
+                provider_name,
+            )
+            output_text = provider_result.text
+            if not provider_result.ok:
+                status = "failed"
+                error = provider_result.error or "provider_error"
+                write_text(patch_path, f"# file-swarm provider failed: {error}\n")
+                write_json(
+                    guard_dir / f"{task.task_id}.guard.json",
+                    {
+                        "task_id": task.task_id,
+                        "passed": False,
+                        "reason": error,
+                        "modified_files": [],
+                    },
                 )
+            else:
                 guard = guard_patch(
                     output_text,
                     task.allowed_files,
@@ -218,49 +281,66 @@ async def _run_task(
                         "modified_files": guard.modified_files,
                     },
                 )
-            except TimeoutError:
-                status = "timeout"
-                error = "timeout"
-                output_text = "timeout"
-                write_text(patch_path, "# file-swarm task timed out\n")
-                write_json(
-                    guard_dir / f"{task.task_id}.guard.json",
-                    {
-                        "task_id": task.task_id,
-                        "passed": False,
-                        "reason": "timeout",
-                        "modified_files": [],
-                    },
-                )
-            except Exception as exc:  # pragma: no cover - defensive against live provider failures
-                status = "failed"
-                error = type(exc).__name__
-                output_text = f"ERROR: {type(exc).__name__}: {exc}"
-                write_text(patch_path, f"# file-swarm worker failed: {type(exc).__name__}\n")
-                write_json(
-                    guard_dir / f"{task.task_id}.guard.json",
-                    {
-                        "task_id": task.task_id,
-                        "passed": False,
-                        "reason": type(exc).__name__,
-                        "modified_files": [],
-                    },
-                )
-            finally:
-                log_worker_call(
-                    state.run_dir,
-                    task.task_id,
-                    start_prompt,
-                    output_text,
-                    slot.id,
-                    slot.provider,
-                    model or slot.default_model,
-                    api_key,
-                    status,
-                    task.assigned_files,
-                    task.allowed_files,
-                    modified_files,
-                )
+        except TimeoutError:
+            status = "timeout"
+            error = "timeout"
+            output_text = "timeout"
+            provider_result = ProviderResult(ok=False, error="timeout", model=model, provider=provider_name)
+            write_text(patch_path, "# file-swarm task timed out\n")
+            write_json(
+                guard_dir / f"{task.task_id}.guard.json",
+                {
+                    "task_id": task.task_id,
+                    "passed": False,
+                    "reason": "timeout",
+                    "modified_files": [],
+                },
+            )
+        except Exception as exc:  # pragma: no cover - defensive against provider/plugin failures
+            status = "failed"
+            error = type(exc).__name__
+            output_text = f"ERROR: {type(exc).__name__}"
+            provider_result = ProviderResult(ok=False, error=error, model=model, provider=provider_name)
+            write_text(patch_path, f"# file-swarm worker failed: {type(exc).__name__}\n")
+            write_json(
+                guard_dir / f"{task.task_id}.guard.json",
+                {
+                    "task_id": task.task_id,
+                    "passed": False,
+                    "reason": type(exc).__name__,
+                    "modified_files": [],
+                },
+            )
+        finally:
+            append_timeline_event(
+                state.run_dir,
+                "worker_finished",
+                {"task_id": task.task_id, "slot_id": slot.id, "model": model, "status": status},
+            )
+            log_worker_call(
+                state.run_dir,
+                task.task_id,
+                start_prompt,
+                output_text,
+                slot.id,
+                slot.provider,
+                model or slot.default_model,
+                api_key,
+                status,
+                task.assigned_files,
+                task.allowed_files,
+                modified_files,
+                provider_ok=provider_result.ok,
+                provider_error=provider_result.error,
+                input_tokens=provider_result.input_tokens,
+                output_tokens=provider_result.output_tokens,
+            )
+            lease_manager.release(slot.id, task.task_id)
+            append_timeline_event(
+                state.run_dir,
+                "slot_released",
+                {"task_id": task.task_id, "slot_id": slot.id, "model": model, "status": status},
+            )
 
         return TaskResult(
             task_id=task.task_id,
@@ -271,6 +351,11 @@ async def _run_task(
             patch_path=str(patch_path),
             modified_files=modified_files,
             error=error,
+            provider_ok=provider_result.ok,
+            provider_error=provider_result.error,
+            input_tokens=provider_result.input_tokens,
+            output_tokens=provider_result.output_tokens,
+            is_mock=provider_name == "mock",
         )
 
 
@@ -320,6 +405,26 @@ async def dispatch_run_async(
     results = await asyncio.gather(*task_runs)
     state.status = "completed" if all(result.status == "passed" for result in results) else "partial"
     state.data["task_results"] = [asdict(result) for result in results]
+    write_json(
+        state.run_dir / "dispatch_report.json",
+        {
+            "parallel": parallel,
+            "tasks": [asdict(result) for result in results],
+            "used_slots": sorted({result.slot_id for result in results}),
+            "used_models": sorted({result.model for result in results}),
+        },
+    )
+    write_text(
+        state.run_dir / "dispatch_report.md",
+        "\n".join(
+            ["# Dispatch Report", ""]
+            + [
+                f"- {result.task_id}: slot={result.slot_id}, model={result.model}, provider={result.provider}, mock={result.is_mock}, status={result.status}"
+                for result in results
+            ]
+        )
+        + "\n",
+    )
     state.save()
     return results
 
@@ -352,19 +457,4 @@ def guard_run(state: RunState) -> str:
 
 
 def write_auto_summary(state: RunState, task_count: int, merge_result: MergeResult, validation_result) -> None:
-    hard_exists = (state.run_dir / "hard_constraints.yaml").exists()
-    interface_exists = (state.run_dir / "interface_contract.yaml").exists()
-    summary = "\n".join(
-        [
-            f"- user_request: {state.user_request}",
-            f"- run_id: {state.run_id}",
-            f"- task_count: {task_count}",
-            f"- hard_constraints_loaded: {hard_exists}",
-            f"- interface_contract_exists: {interface_exists}",
-            f"- patch_guard_passed: {merge_result.merged}",
-            f"- final_patch_generated: {merge_result.final_patch_path is not None and merge_result.final_patch_path.exists()}",
-            f"- recommend_apply: {merge_result.merged and validation_result.status in {'skipped', 'passed'}}",
-            f"- validation_status: {validation_result.status}",
-        ]
-    )
-    (state.run_dir / "codex_summary.md").write_text(summary + "\n", encoding="utf-8")
+    write_codex_summary(state)

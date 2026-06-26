@@ -1,29 +1,44 @@
 import asyncio
+import json
 from pathlib import Path
 
 from file_swarm.dispatcher import dispatch_run_async
-from file_swarm.lease_manager import LeaseManager
 from file_swarm.models import ModelSlot
+from file_swarm.providers.mock_provider import MockProvider
 from file_swarm.run_state import RunState
 from file_swarm.slot_registry import SlotRegistry
 from file_swarm.task_planner import PlannedTask
-from file_swarm.providers.mock_provider import MockProvider
 
 
-def test_async_dispatch_keeps_slot_exclusive(tmp_path: Path, monkeypatch) -> None:
+def _task(task_id: str, path: str) -> PlannedTask:
+    return PlannedTask(
+        task_id=task_id,
+        task_type="patch_worker",
+        assigned_files=[path],
+        allowed_files=[path],
+        readonly_context_files=[],
+        goal=f"Create {path}",
+        requirements=[],
+        forbidden=[],
+    )
+
+
+def test_async_dispatch_uses_multiple_slots_without_reusing_busy_slot(tmp_path: Path, monkeypatch) -> None:
     repo = tmp_path
     (repo / "src").mkdir()
-    (repo / "tests").mkdir()
     state = RunState(run_id="20260101010101000000", root=repo, user_request="demo", repo_root=str(repo))
     state.ensure_dirs()
     state.save()
-    (state.run_dir / "hard_constraints.yaml").write_text("hard_constraints: {}\n", encoding="utf-8")
+    (state.run_dir / "hard_constraints.yaml").write_text(
+        "hard_constraints:\n  file_modification:\n    reject_out_of_scope_patch: true\n    reject_file_deletion_by_default: true\n",
+        encoding="utf-8",
+    )
     (state.run_dir / "interface_contract.yaml").write_text("interface_contract: {}\n", encoding="utf-8")
 
     registry = SlotRegistry(
         slots={
-            "mock1": ModelSlot(
-                id="mock1",
+            slot_id: ModelSlot(
+                id=slot_id,
                 provider="mock",
                 base_url=None,
                 base_url_env=None,
@@ -33,51 +48,50 @@ def test_async_dispatch_keeps_slot_exclusive(tmp_path: Path, monkeypatch) -> Non
                 default_model="mock-model",
                 max_concurrent_tasks=1,
             )
+            for slot_id in ["mock1", "mock2"]
         }
     )
-
-    tasks = [
-        PlannedTask(
-            task_id="task_001",
-            task_type="patch_worker",
-            assigned_files=["src/task_a.py"],
-            allowed_files=["src/task_a.py"],
-            readonly_context_files=[],
-            goal="Create task_a",
-            requirements=[],
-            forbidden=[],
-        ),
-        PlannedTask(
-            task_id="task_002",
-            task_type="patch_worker",
-            assigned_files=["src/task_b.py"],
-            allowed_files=["src/task_b.py"],
-            readonly_context_files=[],
-            goal="Create task_b",
-            requirements=[],
-            forbidden=[],
-        ),
-    ]
+    tasks = [_task("task_001", "src/task_a.py"), _task("task_002", "src/task_b.py"), _task("task_003", "src/task_c.py")]
 
     active = 0
     max_active = 0
+    active_by_slot: dict[str, int] = {}
+    overlap_by_slot: list[str] = []
     original_chat = MockProvider.chat
 
     async def tracked_chat(self, model: str, messages: list[dict], **kwargs):
         nonlocal active, max_active
+        task_line = str(messages[0]["content"]).splitlines()[0]
+        task_id = task_line.split(": ", 1)[1]
+        report = json.loads((state.run_dir / "dispatch_report.json").read_text()) if (state.run_dir / "dispatch_report.json").exists() else {}
         active += 1
         max_active = max(max_active, active)
+        slot_events = [
+            json.loads(line)
+            for line in (state.run_dir / "timeline.jsonl").read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        slot_id = next(event["slot_id"] for event in reversed(slot_events) if event["event"] == "slot_acquired" and event["task_id"] == task_id)
+        active_by_slot[slot_id] = active_by_slot.get(slot_id, 0) + 1
+        if active_by_slot[slot_id] > 1:
+            overlap_by_slot.append(slot_id)
         try:
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.08)
             return await original_chat(self, model, messages, **kwargs)
         finally:
+            active_by_slot[slot_id] -= 1
             active -= 1
 
     monkeypatch.setattr(MockProvider, "chat", tracked_chat)
 
     results = asyncio.run(dispatch_run_async(state, tasks=tasks, registry=registry, parallel=2))
 
-    assert max_active == 1
+    assert max_active == 2
+    assert not overlap_by_slot
+    assert {result.slot_id for result in results} == {"mock1", "mock2"}
     assert all(result.status == "passed" for result in results)
-    assert (state.run_dir / "patches" / "task_001.patch").exists()
-    assert (state.run_dir / "patches" / "task_002.patch").exists()
+    for task in tasks:
+        assert (state.run_dir / "transcripts" / f"{task.task_id}.input.md").exists()
+        assert (state.run_dir / "transcripts" / f"{task.task_id}.output.md").exists()
+        assert (state.run_dir / "transcripts" / f"{task.task_id}.meta.json").exists()
+        assert (state.run_dir / "patches" / f"{task.task_id}.patch").exists()

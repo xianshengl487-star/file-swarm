@@ -8,20 +8,36 @@ from dataclasses import dataclass, field
 @dataclass(slots=True)
 class LeaseManager:
     active_by_slot: dict[str, int] = field(default_factory=dict)
+    owners_by_slot: dict[str, str] = field(default_factory=dict)
     _semaphores: dict[str, asyncio.Semaphore] = field(default_factory=dict, init=False, repr=False)
+    _lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
+
+    def is_leased(self, slot_id: str) -> bool:
+        return self.active_by_slot.get(slot_id, 0) > 0
 
     def can_acquire(self, slot_id: str, max_concurrent_tasks: int) -> bool:
         return self.active_by_slot.get(slot_id, 0) < max_concurrent_tasks
+
+    async def try_acquire(self, slot_id: str, task_id: str, max_concurrent_tasks: int = 1) -> bool:
+        async with self._lock:
+            if self.active_by_slot.get(slot_id, 0) >= max_concurrent_tasks:
+                return False
+            self.active_by_slot[slot_id] = self.active_by_slot.get(slot_id, 0) + 1
+            self.owners_by_slot[slot_id] = task_id
+            return True
 
     def acquire(self, slot_id: str, max_concurrent_tasks: int) -> None:
         if not self.can_acquire(slot_id, max_concurrent_tasks):
             raise RuntimeError(f"slot {slot_id} is fully leased")
         self.active_by_slot[slot_id] = self.active_by_slot.get(slot_id, 0) + 1
 
-    def release(self, slot_id: str) -> None:
+    def release(self, slot_id: str, task_id: str | None = None) -> None:
+        if task_id is not None and self.owners_by_slot.get(slot_id) not in {None, task_id}:
+            raise RuntimeError(f"slot {slot_id} is leased by another task")
         current = self.active_by_slot.get(slot_id, 0)
         if current <= 1:
             self.active_by_slot.pop(slot_id, None)
+            self.owners_by_slot.pop(slot_id, None)
         else:
             self.active_by_slot[slot_id] = current - 1
 

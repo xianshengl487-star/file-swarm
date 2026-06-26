@@ -7,6 +7,7 @@ from typing import Any
 
 from .providers.mock_provider import MockProvider
 from .providers.openai_compatible_provider import OpenAICompatibleProvider
+from .providers.base import ProviderResult
 from .slot_registry import SlotRegistry
 
 
@@ -73,7 +74,7 @@ async def _probe_slot(
 
     if live:
         try:
-            reply = await asyncio.wait_for(
+            reply_result = await asyncio.wait_for(
                 provider.chat(model=model, messages=[{"role": "user", "content": "Reply with OK."}], max_tokens=8),
                 timeout=timeout_seconds,
             )
@@ -81,7 +82,11 @@ async def _probe_slot(
             return PreflightRow(slot.id, slot.provider, base_url, fingerprint, model, "timeout", "live probe timed out")
         except Exception as exc:  # pragma: no cover - defensive for live calls
             return PreflightRow(slot.id, slot.provider, base_url, fingerprint, model, "failed", type(exc).__name__)
-        reply_text = (reply or "").strip()
+        if isinstance(reply_result, str):
+            reply_result = ProviderResult(ok=True, text=reply_result, model=model, provider=slot.provider)
+        if not reply_result.ok:
+            return PreflightRow(slot.id, slot.provider, base_url, fingerprint, model, "failed", reply_result.error or "provider_error")
+        reply_text = (reply_result.text or "").strip()
         if reply_text == "OK":
             status = "mock_ready" if slot.provider == "mock" or not api_key else "live_ok"
             return PreflightRow(slot.id, slot.provider, base_url, fingerprint, model, status, "ok")
@@ -125,6 +130,16 @@ def _demo_ok_patch() -> str:
     )
 
 
+def _is_unified_diff(text: str) -> bool:
+    return ("--- " in text and "+++ " in text and "@@ " in text) or "```diff" in text
+
+
+def _coerce_result(result: ProviderResult | str, model: str, provider: str) -> ProviderResult:
+    if isinstance(result, ProviderResult):
+        return result
+    return ProviderResult(ok=True, text=str(result), model=model, provider=provider)
+
+
 def run_smoke_test(
     repo_root: Path,
     model_slots_path: Path | None = None,
@@ -148,52 +163,70 @@ def run_smoke_test(
     slot = slots[0]
     base_url = registry.resolve_base_url(slot) or ""
     api_key = registry.env_value(slot.api_key_env)
+    if live and slot.provider != "mock" and not api_key:
+        return SmokeTestResult(report_text="status: skipped\nreason: missing key\n", patch_text="", status="skipped")
     provider = MockProvider() if slot.provider == "mock" or not api_key else OpenAICompatibleProvider(base_url=base_url, api_key=api_key)
     model = requested_model or slot.default_model
 
-    async def _live_patch() -> str:
-        return await provider.chat(
+    async def _ping() -> ProviderResult:
+        return _coerce_result(
+            await provider.chat(
+                model=model,
+                messages=[{"role": "user", "content": "Reply with OK."}],
+                max_tokens=8,
+            ),
+            model,
+            slot.provider,
+        )
+
+    async def _patch() -> ProviderResult:
+        return _coerce_result(await provider.chat(
             model=model,
             messages=[
                 {
                     "role": "user",
                     "content": (
-                        "Reply with OK.\n"
-                        "Then generate a unified diff patch for virtual file hello.py only.\n"
+                        "File: hello.py\n\n"
+                        "Current content:\n"
+                        "def hello():\n"
+                        "    return \"hello\"\n\n"
+                        "Task:\n"
+                        "Change hello() to return \"hello world\".\n\n"
+                        "Return unified diff patch only.\n"
                         "ALLOWED_FILES:\n"
                         "- hello.py\n"
                     ),
                 }
             ],
             max_tokens=128,
-        )
+        ), model, slot.provider)
 
     try:
         if live:
-            response = asyncio.run(asyncio.wait_for(_live_patch(), timeout=timeout_seconds))
+            ping_result = asyncio.run(asyncio.wait_for(_ping(), timeout=timeout_seconds))
+            if not ping_result.ok or ping_result.text.strip() != "OK":
+                reason = ping_result.error or "ping did not return OK"
+                return SmokeTestResult(report_text=f"status: failed\nreason: {reason}\n", patch_text="", status="failed")
+            patch_result = asyncio.run(asyncio.wait_for(_patch(), timeout=timeout_seconds))
         else:
-            response = asyncio.run(
-                provider.chat(
-                    model=model,
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": (
-                                "Return a deterministic smoke-test patch for virtual file hello.py.\n"
-                                "ALLOWED_FILES:\n"
-                                "- hello.py\n"
-                            ),
-                        }
-                    ],
-                    max_tokens=128,
-                )
+            patch_result = asyncio.run(
+                _patch()
             )
     except TimeoutError:
         return SmokeTestResult(report_text="status: timeout\nreason: live smoke test timed out\n", patch_text="", status="timeout")
     except Exception as exc:  # pragma: no cover - defensive for live calls
         return SmokeTestResult(report_text=f"status: failed\nreason: {type(exc).__name__}\n", patch_text="", status="failed")
 
-    patch_text = response if "```diff" in response else _demo_ok_patch()
+    if not patch_result.ok:
+        return SmokeTestResult(report_text=f"status: failed\nreason: {patch_result.error or 'provider_error'}\n", patch_text="", status="failed")
+    response = patch_result.text
+    if _is_unified_diff(response):
+        patch_text = response
+    elif live and slot.provider != "mock":
+        report = "status: failed\nreason: model did not return unified diff patch\n"
+        return SmokeTestResult(report_text=report, patch_text="", status="failed")
+    else:
+        patch_text = _demo_ok_patch()
     report = "\n".join(
         [
             "status: passed",

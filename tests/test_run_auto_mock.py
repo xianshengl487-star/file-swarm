@@ -40,5 +40,5 @@ def test_auto_creates_run_outputs(tmp_path: Path, monkeypatch) -> None:
     assert list((run_dir / "transcripts").glob("*.meta.json"))
 
     summary = (run_dir / "codex_summary.md").read_text(encoding="utf-8")
-    assert "hard_constraints_loaded: True" in summary
-    assert "interface_contract_exists: True" in summary
+    assert "hard_constraints_loaded: yes" in summary
+    assert "interface_contract_loaded: yes" in summary

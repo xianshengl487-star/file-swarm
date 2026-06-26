@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import difflib
 
+from .base import ProviderResult
+
 
 @dataclass(slots=True)
 class MockProvider:
@@ -57,12 +59,12 @@ class MockProvider:
         new = 'def hello() -> str:\n    return "OK"\n'
         return self._patch_from_strings("", new, path)
 
-    async def chat(self, model: str, messages: list[dict], **kwargs) -> str:
+    async def chat(self, model: str, messages: list[dict], **kwargs) -> ProviderResult:
         user_text = "\n".join(str(message.get("content", "")) for message in messages)
         allowed_files = self._extract_allowed_files(user_text)
 
         if "Reply with OK." in user_text:
-            return "OK"
+            return ProviderResult(ok=True, text="OK", model=model, provider="mock")
 
         if "subtract" in user_text and (
             "src/demo_math.py" in allowed_files or "tests/test_demo_math.py" in allowed_files
@@ -85,7 +87,7 @@ class MockProvider:
                 path,
             )
 
-        return (
+        text = (
             "## Implementation Summary\n\n"
             f"Mock provider produced a deterministic patch for model {model}.\n\n"
             "## Patch\n\n"
@@ -99,3 +101,4 @@ class MockProvider:
             "## Input Echo\n\n"
             f"{user_text[:200]}\n"
         )
+        return ProviderResult(ok=True, text=text, model=model, provider="mock")

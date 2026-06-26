@@ -11,7 +11,13 @@ from .slot_registry import SlotRegistry
 
 REDACT_PATTERNS = [
     re.compile(r"Authorization:\s*Bearer\s+[^\s]+", re.IGNORECASE),
-    re.compile(r"API[_-]?KEY\s*[:=]\s*[^\s]+", re.IGNORECASE),
+    re.compile(r"Bearer\s+[A-Za-z0-9._\-]+", re.IGNORECASE),
+    re.compile(r"\bsk-[A-Za-z0-9_\-]{12,}\b", re.IGNORECASE),
+    re.compile(r"\bnvapi-[A-Za-z0-9_\-]{12,}\b", re.IGNORECASE),
+    re.compile(r"\btp-[A-Za-z0-9_\-]{12,}\b", re.IGNORECASE),
+    re.compile(r"api_key\s*=\s*[^\s]+", re.IGNORECASE),
+    re.compile(r'"api_key"\s*:\s*"[^"]+"', re.IGNORECASE),
+    re.compile(r"\b[A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|KEY)\s*=\s*[^\s]+", re.IGNORECASE),
     re.compile(r"Cookie:\s*[^\s]+", re.IGNORECASE),
 ]
 
@@ -23,14 +29,26 @@ def redact_text(text: str) -> str:
     return redacted
 
 
+def append_timeline_event(run_dir: Path, event_type: str, payload: dict[str, Any]) -> None:
+    event = {
+        "event": event_type,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        **payload,
+    }
+    timeline_path = run_dir / "timeline.jsonl"
+    timeline_path.parent.mkdir(parents=True, exist_ok=True)
+    with timeline_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n")
 
 
 def write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
+    path.write_text(text, encoding="utf-8", newline="\n")
 
 
 def log_worker_call(
@@ -46,6 +64,10 @@ def log_worker_call(
     assigned_files: list[str],
     allowed_files: list[str],
     modified_files: list[str],
+    provider_ok: bool | None = None,
+    provider_error: str | None = None,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
 ) -> None:
     transcript_dir = run_dir / "transcripts"
     write_text(transcript_dir / f"{task_id}.input.md", redact_text(input_prompt))
@@ -62,9 +84,10 @@ def log_worker_call(
         "assigned_files": assigned_files,
         "allowed_files": allowed_files,
         "modified_files": modified_files,
+        "provider_ok": provider_ok,
+        "provider_error": redact_text(provider_error or "") or None,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
     }
     write_json(transcript_dir / f"{task_id}.meta.json", meta)
-    timeline_path = run_dir / "timeline.jsonl"
-    timeline_path.parent.mkdir(parents=True, exist_ok=True)
-    with timeline_path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(meta, ensure_ascii=False) + "\n")
+    append_timeline_event(run_dir, "worker_transcript_saved", meta)

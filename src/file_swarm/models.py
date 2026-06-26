@@ -86,3 +86,8 @@ class TaskResult:
     patch_path: str
     modified_files: list[str] = field(default_factory=list)
     error: str | None = None
+    provider_ok: bool | None = None
+    provider_error: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    is_mock: bool = False
