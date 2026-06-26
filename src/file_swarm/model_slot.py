@@ -1,0 +1,2 @@
+"""Model slot definitions."""
+

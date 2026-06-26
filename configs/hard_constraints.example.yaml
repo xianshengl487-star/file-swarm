@@ -1,0 +1,54 @@
+hard_constraints:
+  scope:
+    allowed_root_dirs:
+      - src
+      - tests
+    forbidden_root_dirs:
+      - .git
+      - node_modules
+      - dist
+      - build
+      - vendor
+      - .env
+      - .github/secrets
+
+  file_modification:
+    worker_can_modify_only_assigned_files: true
+    reject_out_of_scope_patch: true
+    reject_unlisted_file_creation: true
+    reject_file_deletion_by_default: true
+    require_patch_format: unified_diff
+
+  dependencies:
+    allow_new_dependencies: false
+    allow_lockfile_changes: false
+    forbidden_files:
+      - package.json
+      - package-lock.json
+      - pnpm-lock.yaml
+      - yarn.lock
+      - pyproject.toml
+      - requirements.txt
+
+  public_api:
+    allow_breaking_changes: false
+    require_contract_update_for_public_api_change: true
+    reject_unapproved_export_changes: true
+
+  security:
+    redact_secrets: true
+    reject_raw_secret_output: true
+    reject_env_file_modification: true
+    reject_auth_header_logging: true
+    reject_cookie_logging: true
+
+  execution:
+    worker_can_run_shell: false
+    worker_can_install_dependencies: false
+    worker_can_directly_write_files: false
+    worker_must_return_patch_only: true
+
+  validation:
+    require_patch_guard: true
+    require_final_summary: true
+    require_validation_report: true

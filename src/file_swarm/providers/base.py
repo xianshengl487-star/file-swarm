@@ -1,0 +1,2 @@
+"""Base provider interface."""
+

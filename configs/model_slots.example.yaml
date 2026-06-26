@@ -1,0 +1,45 @@
+model_slots:
+  - id: deepseek_slot_01
+    provider: openai_compatible
+    base_url: https://api.deepseek.com
+    api_key_env: DEEPSEEK_API_KEY_01
+    enabled: true
+    allowed_models:
+      - deepseek-chat
+      - deepseek-reasoner
+    default_model: deepseek-chat
+    max_concurrent_tasks: 1
+
+  - id: glm_slot_01
+    provider: openai_compatible
+    base_url: https://open.bigmodel.cn/api/paas/v4
+    api_key_env: GLM_API_KEY_01
+    enabled: true
+    allowed_models:
+      - glm-4-plus
+      - glm-4-air
+    default_model: glm-4-plus
+    max_concurrent_tasks: 1
+
+  - id: qwen_slot_01
+    provider: openai_compatible
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    api_key_env: QWEN_API_KEY_01
+    enabled: true
+    allowed_models:
+      - qwen3-coder-plus
+      - qwen-plus
+      - qwen-turbo
+    default_model: qwen3-coder-plus
+    max_concurrent_tasks: 1
+
+  - id: mimo_slot_01
+    provider: openai_compatible
+    base_url: https://example.com/v1
+    api_key_env: MIMO_API_KEY_01
+    enabled: false
+    allowed_models:
+      - mimo-v2.5
+      - mimo-v2.5-pro
+    default_model: mimo-v2.5
+    max_concurrent_tasks: 1

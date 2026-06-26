@@ -1,0 +1,36 @@
+interface_contract:
+  project_style:
+    language: auto_detect
+    framework: auto_detect
+    follow_existing_style: true
+    avoid_unnecessary_refactor: true
+    avoid_large_reformat: true
+
+  naming:
+    functions: follow_existing
+    classes: follow_existing
+    types: follow_existing
+    files: follow_existing
+
+  error_handling:
+    use_existing_error_pattern: true
+    do_not_introduce_new_error_shape: true
+    public_error_message_must_be_safe: true
+
+  return_values:
+    preserve_existing_response_shape: true
+    do_not_change_api_response_without_approval: true
+
+  imports:
+    prefer_existing_utilities: true
+    do_not_add_new_dependencies: true
+    avoid_circular_imports: true
+
+  testing:
+    add_or_update_tests_when_behavior_changes: true
+    prefer_existing_test_framework: true
+    do_not_snapshot_unrelated_changes: true
+
+  documentation:
+    avoid_excessive_comments: true
+    document_only_non_obvious_logic: true

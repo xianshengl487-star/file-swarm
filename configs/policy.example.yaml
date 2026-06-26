@@ -1,0 +1,43 @@
+execution_mode:
+  default: codex_lite
+
+codex_lite:
+  enabled: true
+  codex_role: final_supervisor
+  delegate_repo_mapping: true
+  delegate_planning: true
+  delegate_contract_building: true
+  delegate_task_splitting: true
+  delegate_patch_review: true
+  delegate_repair: true
+  codex_summary_only: true
+  max_summary_lines: 120
+  save_full_transcripts_to_disk: true
+
+security_policy:
+  require_visible_transcripts: true
+  redact_secrets: true
+  reject_raw_secret_output: true
+  require_slot_preflight: true
+  require_model_preflight: true
+  one_slot_one_worker: true
+  one_worker_one_task: true
+  allow_same_slot_parallel_calls: false
+  allow_worker_without_key: false
+  allow_model_not_in_slot: false
+  reject_out_of_scope_patch: true
+  reject_unapproved_dependency_change: true
+
+worker_policy:
+  default_worker_type: stateless_patch_worker
+  worker_can_write_files: false
+  worker_can_run_shell: false
+  worker_can_install_dependencies: false
+  worker_output_format: unified_diff_patch
+
+apply_policy:
+  default_mode: dry_merge
+  allow_apply_patch: true
+  require_patch_guard_before_apply: true
+  require_git_clean_before_apply: true
+  create_backup_before_apply: true

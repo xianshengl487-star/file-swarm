@@ -1,0 +1,2 @@
+"""Patch guard checks."""
+

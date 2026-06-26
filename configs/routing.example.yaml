@@ -1,0 +1,43 @@
+model_routing:
+  repo_mapper:
+    preferred_models:
+      - mimo-v2.5
+      - glm-4-air
+      - qwen-turbo
+
+  planner:
+    preferred_models:
+      - deepseek-chat
+      - glm-4-plus
+      - qwen3-coder-plus
+
+  contract_builder:
+    preferred_models:
+      - deepseek-reasoner
+      - glm-4-plus
+      - qwen3-coder-plus
+
+  task_splitter:
+    preferred_models:
+      - deepseek-chat
+      - qwen3-coder-plus
+      - glm-4-plus
+
+  patch_worker:
+    preferred_models:
+      - qwen3-coder-plus
+      - deepseek-chat
+      - glm-4-plus
+      - mimo-v2.5-pro
+
+  review_worker:
+    preferred_models:
+      - deepseek-reasoner
+      - glm-4-plus
+      - qwen3-coder-plus
+
+  repair_worker:
+    preferred_models:
+      - qwen3-coder-plus
+      - deepseek-chat
+      - glm-4-plus
