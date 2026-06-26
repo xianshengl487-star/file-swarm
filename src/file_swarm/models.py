@@ -61,3 +61,28 @@ class RepoScanResult:
     config_files: list[str]
     test_command: str | None
     project_type: str
+
+
+@dataclass(slots=True)
+class WorkerInput:
+    task_id: str
+    task_type: str
+    user_request: str
+    assigned_files: list[str]
+    allowed_files: list[str]
+    readonly_context_files: list[str]
+    hard_constraints_yaml: str
+    interface_contract_yaml: str
+    repo_map: str
+
+
+@dataclass(slots=True)
+class TaskResult:
+    task_id: str
+    slot_id: str
+    model: str
+    provider: str
+    status: str
+    patch_path: str
+    modified_files: list[str] = field(default_factory=list)
+    error: str | None = None

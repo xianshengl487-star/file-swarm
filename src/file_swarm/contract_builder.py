@@ -60,3 +60,23 @@ def write_contracts(run_dir: Path) -> tuple[Path, Path]:
     hard_path.write_text(yaml.safe_dump(DEFAULT_HARD_CONSTRAINTS, sort_keys=False, allow_unicode=True), encoding="utf-8")
     interface_path.write_text(yaml.safe_dump(DEFAULT_INTERFACE_CONTRACT, sort_keys=False, allow_unicode=True), encoding="utf-8")
     return hard_path, interface_path
+
+
+def ensure_contracts(run_dir: Path) -> tuple[Path, Path]:
+    hard_path = run_dir / "hard_constraints.yaml"
+    interface_path = run_dir / "interface_contract.yaml"
+    if not hard_path.exists() or not interface_path.exists():
+        return write_contracts(run_dir)
+    return hard_path, interface_path
+
+
+def load_contract_texts(run_dir: Path) -> tuple[str, str]:
+    hard_path, interface_path = ensure_contracts(run_dir)
+    return hard_path.read_text(encoding="utf-8"), interface_path.read_text(encoding="utf-8")
+
+
+def load_contract_dicts(run_dir: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    hard_text, interface_text = load_contract_texts(run_dir)
+    hard = yaml.safe_load(hard_text) or {}
+    interface = yaml.safe_load(interface_text) or {}
+    return hard, interface

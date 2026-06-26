@@ -1,7 +1,17 @@
 from __future__ import annotations
 
-import shutil
+from dataclasses import dataclass
+import subprocess
+import sys
 from pathlib import Path
+
+
+@dataclass(slots=True)
+class ValidationResult:
+    command: str | None
+    status: str
+    stdout: str
+    stderr: str
 
 
 def detect_test_command(root: Path) -> str | None:
@@ -16,11 +26,40 @@ def detect_test_command(root: Path) -> str | None:
     return None
 
 
-def run_static_validation(run_dir: Path, project_root: Path) -> str:
-    command = detect_test_command(project_root)
-    report = [f"project_root: {project_root}", f"test_command: {command or 'skipped'}"]
+def run_validation(repo_root: Path, apply_mode: bool = False) -> ValidationResult:
+    command = detect_test_command(repo_root)
     if command is None:
-        report.append("status: skipped")
+        return ValidationResult(command=None, status="skipped", stdout="", stderr="")
+    if not apply_mode:
+        return ValidationResult(command=command, status="skipped", stdout="", stderr="")
+
+    if command == "pytest":
+        proc = subprocess.run(
+            [sys.executable, "-m", "pytest", "-q"],
+            cwd=repo_root,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    elif command == "npm test":
+        proc = subprocess.run(["npm", "test"], cwd=repo_root, text=True, capture_output=True, check=False)
+    elif command == "pnpm test":
+        proc = subprocess.run(["pnpm", "test"], cwd=repo_root, text=True, capture_output=True, check=False)
     else:
-        report.append("status: deferred_in_scaffold_mode")
-    return "\n".join(report) + "\n"
+        proc = subprocess.run(["yarn", "test"], cwd=repo_root, text=True, capture_output=True, check=False)
+
+    status = "passed" if proc.returncode == 0 else "failed"
+    return ValidationResult(command=command, status=status, stdout=proc.stdout, stderr=proc.stderr)
+
+
+def render_validation_report(result: ValidationResult) -> str:
+    return "\n".join(
+        [
+            f"command: {result.command or 'skipped'}",
+            f"status: {result.status}",
+            "stdout:",
+            result.stdout.strip() if result.stdout else "",
+            "stderr:",
+            result.stderr.strip() if result.stderr else "",
+        ]
+    ).strip() + "\n"

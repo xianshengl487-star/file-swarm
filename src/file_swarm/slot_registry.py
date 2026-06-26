@@ -37,8 +37,35 @@ class SlotRegistry:
     def list_enabled(self) -> list[ModelSlot]:
         return [slot for slot in self.slots.values() if slot.enabled]
 
+    def list_enabled_for_model(self, model: str | None = None) -> list[ModelSlot]:
+        slots = self.list_enabled()
+        if model is None:
+            return slots
+        return [slot for slot in slots if model in slot.allowed_models]
+
     def get(self, slot_id: str) -> ModelSlot:
         return self.slots[slot_id]
+
+    def resolve_base_url(self, slot: ModelSlot) -> str | None:
+        if slot.base_url:
+            return slot.base_url
+        if slot.base_url_env:
+            return self.env_value(slot.base_url_env)
+        return None
+
+    def validate_slot(self, slot: ModelSlot) -> list[str]:
+        issues: list[str] = []
+        if not slot.enabled:
+            issues.append("disabled")
+        if not slot.allowed_models:
+            issues.append("allowed_models empty")
+        if slot.default_model not in slot.allowed_models:
+            issues.append("default_model not allowed")
+        if not slot.api_key_env:
+            issues.append("api_key_env missing")
+        if slot.provider not in {"openai_compatible", "mock"}:
+            issues.append("unsupported provider")
+        return issues
 
     @staticmethod
     def key_fingerprint(api_key: str | None) -> str:
