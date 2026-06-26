@@ -12,6 +12,8 @@ from .models import ModelSlot, TaskResult
 from .model_router import ModelRouter
 from .patch_guard import guard_patch
 from .patch_merger import MergeResult, merge_patches
+from .patch_normalizer import normalize_patch
+from .providers.anthropic_provider import AnthropicProvider
 from .providers.base import ProviderResult
 from .providers.mock_provider import MockProvider
 from .providers.openai_compatible_provider import OpenAICompatibleProvider
@@ -69,13 +71,37 @@ def _build_repo_map(scan) -> str:
 
 
 def _read_context(repo_root: Path, file_path: str) -> str:
+    """Read a context file, capped to avoid blowing up the prompt."""
+    MAX_CONTEXT_CHARS = 3000
     path = repo_root / file_path
     if not path.exists():
         return "<missing>"
     try:
-        return path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8")
+        if len(text) > MAX_CONTEXT_CHARS:
+            text = text[:MAX_CONTEXT_CHARS] + "\n... (truncated)"
+        return text
     except Exception:
         return "<unreadable>"
+
+
+def _condense_contracts(hard_constraints_yaml: str, interface_contract_yaml: str) -> str:
+    """Condense the full YAML contracts into a compact rule block (saves ~300 tokens/call)."""
+    lines = [
+        "## Hard Constraints (summarised)",
+        "- You may ONLY modify files listed in ALLOWED_FILES.",
+        "- Do NOT create new files outside ALLOWED_FILES.",
+        "- Do NOT delete files. Do NOT modify package.json, pyproject.toml, lockfiles.",
+        "- Do NOT add new dependencies or import new third-party packages.",
+        "- Return output as a **unified diff patch** inside ` ``diff ` fences.",
+        "- Do NOT output secrets (API keys, tokens, passwords, credentials).",
+        "- Do NOT use absolute filesystem paths in the patch.",
+        "",
+        "## Interface Contract (summarised)",
+        "- Follow the existing code style and naming conventions in the file.",
+        "- Match the existing indentation, quoting, and formatting.",
+    ]
+    return "\n".join(lines)
 
 
 def _build_worker_input(
@@ -88,38 +114,21 @@ def _build_worker_input(
 ) -> str:
     context_chunks: list[str] = []
     for context_file in task.readonly_context_files:
-        context_chunks.append(f"FILE: {context_file}\n```text\n{_read_context(state.root, context_file)}\n```")
+        content = _read_context(state.root, context_file)
+        context_chunks.append(f"FILE: {context_file}\n```text\n{content}\n```")
     readonly_block = "\n\n".join(context_chunks) if context_chunks else "<none>"
     allowed_lines = "\n".join(f"- {path}" for path in task.allowed_files)
     assigned_lines = "\n".join(f"- {path}" for path in task.assigned_files)
-    forbidden_lines = "\n".join(f"- {item}" for item in task.forbidden)
-    requirements_lines = "\n".join(f"- {item}" for item in task.requirements) if task.requirements else "- none"
+    contracts_block = _condense_contracts(hard_constraints_yaml, interface_contract_yaml)
     return (
         f"TASK_ID: {task.task_id}\n"
-        f"TASK_TYPE: {task.task_type}\n"
+        f"TASK: {task.goal}\n"
         f"USER_REQUEST: {state.user_request}\n"
-        f"GOAL: {task.goal}\n"
-        f"ASSIGNED_FILES:\n{assigned_lines or '- none'}\n"
-        f"ALLOWED_FILES:\n{allowed_lines or '- none'}\n"
-        f"READ_ONLY_CONTEXT_FILES:\n{readonly_block}\n\n"
-        f"REQUIREMENTS:\n{requirements_lines}\n"
-        f"FORBIDDEN:\n{forbidden_lines}\n\n"
-        f"HARD_CONSTRAINTS_YAML:\n```yaml\n{hard_constraints_yaml}\n```\n\n"
-        f"INTERFACE_CONTRACT_YAML:\n```yaml\n{interface_contract_yaml}\n```\n\n"
-        f"REPO_MAP:\n{repo_map}\n\n"
-        "You are a stateless patch worker.\n"
-        "You do not have permission to write files.\n"
-        "You must return a unified diff patch.\n"
-        "You must only modify allowed_files.\n"
-        "You must obey hard_constraints and interface_contract.\n"
-        "Do not add dependencies.\n"
-        "Do not output secrets.\n"
-        "Do not change public APIs unless explicitly allowed.\n"
-        "Return output in this shape:\n"
-        "## Implementation Summary\n\n"
-        "## Patch\n\n```diff\n...\n```\n\n"
-        "## Risk Notes\n\n"
-        "## Suggested Tests\n"
+        f"ALLOWED_FILES:\n{allowed_lines or '- none'}\n\n"
+        f"READ_ONLY_CONTEXT:\n{readonly_block}\n\n"
+        f"{contracts_block}\n\n"
+        "Return ONLY a unified diff patch in this format:\n\n"
+        "```diff\n--- a/FILE\n+++ b/FILE\n@@ ... @@\n...\n```\n"
     )
 
 
@@ -149,18 +158,25 @@ async def _acquire_available_slot(
 ) -> tuple[ModelSlot, str]:
     candidate_models = _candidate_models(registry, router, task.task_type)
     while True:
+        acquired_any = False
         for model in candidate_models:
             for slot in registry.list_enabled_for_model(model):
                 if not slot.enabled or slot.max_concurrent_tasks <= 0:
                     continue
                 if not _slot_has_key_or_mock(slot, registry):
                     continue
-                if lease_manager.is_leased(slot.id):
-                    continue
-                acquired = await lease_manager.try_acquire(slot.id, task_id=task.task_id, max_concurrent_tasks=1)
+                acquired = await lease_manager.try_acquire(
+                    slot.id,
+                    task_id=task.task_id,
+                    max_concurrent_tasks=slot.max_concurrent_tasks,
+                )
                 if acquired:
                     return slot, model
-        await asyncio.sleep(0.05)
+                acquired_any = True
+        # No slot available right now (all candidate slots are at capacity);
+        # brief yield before retrying. acquired_any indicates we saw eligible
+        # slots but they were full, so a retry will eventually succeed.
+        await asyncio.sleep(0.05 if acquired_any else 0.05)
 
 
 def _provider_for_slot(slot: ModelSlot, registry: SlotRegistry):
@@ -168,6 +184,8 @@ def _provider_for_slot(slot: ModelSlot, registry: SlotRegistry):
     base_url = registry.resolve_base_url(slot) or ""
     if slot.provider == "mock" or not api_key:
         return MockProvider(), "mock", None
+    if slot.provider == "anthropic":
+        return AnthropicProvider(base_url=base_url, api_key=api_key), "anthropic", api_key
     return OpenAICompatibleProvider(base_url=base_url, api_key=api_key), "openai_compatible", api_key
 
 
@@ -261,8 +279,22 @@ async def _run_task(
                     },
                 )
             else:
+                # ── Normalize LLM output before guard/merge ──────────
+                # Fixes common issues: hunk count mismatch, missing a/b
+                # prefix, markdown artifacts, trailing whitespace.
+                norm = normalize_patch(output_text)
+                if norm.repairs:
+                    append_timeline_event(
+                        state.run_dir,
+                        "patch_normalized",
+                        {
+                            "task_id": task.task_id,
+                            "repairs": norm.repairs,
+                        },
+                    )
+                guard_input = norm.patch_text if norm.ok else output_text
                 guard = guard_patch(
-                    output_text,
+                    guard_input,
                     task.allowed_files,
                     hard_constraints=hard_constraints,
                     hard_constraints_path=state.run_dir / "hard_constraints.yaml",
@@ -271,7 +303,8 @@ async def _run_task(
                 if not guard.passed:
                     status = "rejected"
                     error = guard.reason
-                write_text(patch_path, output_text if output_text.strip() else "# empty patch rejected\n")
+                # Save normalized patch; original stored in transcript.
+                write_text(patch_path, guard_input if guard_input.strip() else "# empty patch rejected\n")
                 write_json(
                     guard_dir / f"{task.task_id}.guard.json",
                     {
@@ -442,7 +475,7 @@ def dispatch_run(
 def guard_run(state: RunState) -> str:
     guard_dir = state.run_dir / "guard_reports"
     rows: list[dict[str, Any]] = []
-    for path in sorted(guard_dir.glob("*.json")):
+    for path in sorted(guard_dir.glob("*.guard.json")):
         rows.append(json.loads(path.read_text(encoding="utf-8")))
     report = {
         "status": "ok" if rows and all(row.get("passed") for row in rows) else "partial",

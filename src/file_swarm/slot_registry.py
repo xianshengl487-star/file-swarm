@@ -63,7 +63,7 @@ class SlotRegistry:
             issues.append("default_model not allowed")
         if not slot.api_key_env:
             issues.append("api_key_env missing")
-        if slot.provider not in {"openai_compatible", "mock"}:
+        if slot.provider not in {"openai_compatible", "mock", "anthropic"}:
             issues.append("unsupported provider")
         return issues
 

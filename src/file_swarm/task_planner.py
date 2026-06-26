@@ -37,6 +37,32 @@ def build_plan(user_request: str, scan: RepoScanResult, hard_constraints: dict[s
     return "\n".join(lines) + "\n"
 
 
+_COMMON_FORBIDDEN = [
+    "Do not modify files outside allowed_files",
+    "Do not add dependencies",
+    "Do not expose secrets",
+    "Return unified diff patch only",
+]
+
+
+def _collect_source_files(scan: RepoScanResult) -> list[str]:
+    """Pick concrete source files (not __init__, not __pycache__) for per-file tasks."""
+    ignored_basenames = {"__init__.py", "conftest.py"}
+    collected: list[str] = []
+    source_prefixes = tuple(f"{d}/" for d in scan.source_dirs) if scan.source_dirs else ("",)
+    for path in scan.files:
+        if not path.endswith(".py"):
+            continue
+        if any(path.startswith(f"{d}/") for d in scan.test_dirs):
+            continue
+        if Path(path).name in ignored_basenames:
+            continue
+        if scan.source_dirs and not any(path.startswith(prefix) for prefix in source_prefixes):
+            continue
+        collected.append(path)
+    return collected
+
+
 def split_tasks(scan: RepoScanResult, user_request: str) -> list[PlannedTask]:
     normalized = user_request.lower()
     if ("mouse clicker" in normalized or "auto clicker" in normalized or "连点器" in normalized) and {
@@ -44,13 +70,6 @@ def split_tasks(scan: RepoScanResult, user_request: str) -> list[PlannedTask]:
         "src/clicker_ui.py",
         "tests/test_clicker_design.py",
     }.issubset(set(scan.files)):
-        common_forbidden = [
-            "Do not modify files outside allowed_files",
-            "Do not add dependencies",
-            "Do not call operating-system mouse APIs in tests",
-            "Do not expose secrets",
-            "Return unified diff patch only",
-        ]
         return [
             PlannedTask(
                 task_id="task_001",
@@ -60,7 +79,7 @@ def split_tasks(scan: RepoScanResult, user_request: str) -> list[PlannedTask]:
                 readonly_context_files=[],
                 goal="Implement the safe clicker domain model and schedule builder.",
                 requirements=["Keep mouse behavior as data-only planning, not real OS clicks."],
-                forbidden=common_forbidden,
+                forbidden=_COMMON_FORBIDDEN + ["Do not call operating-system mouse APIs in tests"],
             ),
             PlannedTask(
                 task_id="task_002",
@@ -70,7 +89,7 @@ def split_tasks(scan: RepoScanResult, user_request: str) -> list[PlannedTask]:
                 readonly_context_files=["src/clicker_core.py"],
                 goal="Implement a designed text UI layer for the clicker.",
                 requirements=["Expose a status card, safety banner, and theme tokens."],
-                forbidden=common_forbidden,
+                forbidden=_COMMON_FORBIDDEN + ["Do not call operating-system mouse APIs in tests"],
             ),
             PlannedTask(
                 task_id="task_003",
@@ -80,7 +99,7 @@ def split_tasks(scan: RepoScanResult, user_request: str) -> list[PlannedTask]:
                 readonly_context_files=["src/clicker_core.py", "src/clicker_ui.py"],
                 goal="Add tests proving the clicker plan and UI contract work together.",
                 requirements=["Test schedule generation, safety validation, and UI copy."],
-                forbidden=common_forbidden,
+                forbidden=_COMMON_FORBIDDEN + ["Do not call operating-system mouse APIs in tests"],
             ),
         ]
 
@@ -97,15 +116,36 @@ def split_tasks(scan: RepoScanResult, user_request: str) -> list[PlannedTask]:
                 readonly_context_files=[path for path in allowed if path.endswith("test_demo_math.py")],
                 goal=user_request or "Implement the requested change.",
                 requirements=["Update demo math subtraction and tests."],
-                forbidden=[
-                    "Do not modify files outside allowed_files",
-                    "Do not add dependencies",
-                    "Do not expose secrets",
-                    "Return unified diff patch only",
-                ],
+                forbidden=_COMMON_FORBIDDEN,
             )
         ]
 
+    # ---- Generic branch: one task per concrete source file ----
+    # This lets the dispatcher spread tasks across multiple slots (different
+    # APIs) so each "pseudo-agent" works on a different file in parallel.
+    source_files = _collect_source_files(scan)
+    max_tasks = 8
+    if source_files:
+        source_files = source_files[:max_tasks]
+        tasks: list[PlannedTask] = []
+        for index, file_path in enumerate(source_files, start=1):
+            tasks.append(
+                PlannedTask(
+                    task_id=f"task_{index:03d}",
+                    task_type="patch_worker",
+                    assigned_files=[file_path],
+                    allowed_files=[file_path],
+                    # Pass the file itself as read-only context so a provider can
+                    # read its current content and produce a meaningful diff.
+                    readonly_context_files=[file_path],
+                    goal=user_request or f"Apply the requested change to {file_path}.",
+                    requirements=["Follow existing style; do not break existing tests."],
+                    forbidden=_COMMON_FORBIDDEN,
+                )
+            )
+        return tasks
+
+    # ---- Final fallback: create one new file (no existing sources) ----
     targets = scan.source_dirs or ["src"]
     task_file = f"{targets[0]}/generated_change.py"
     readonly = scan.test_dirs[:1] or scan.files[:1]
@@ -118,11 +158,6 @@ def split_tasks(scan: RepoScanResult, user_request: str) -> list[PlannedTask]:
             readonly_context_files=readonly,
             goal=user_request or "Implement the requested change.",
             requirements=[],
-            forbidden=[
-                "Do not modify files outside allowed_files",
-                "Do not add dependencies",
-                "Do not expose secrets",
-                "Return unified diff patch only",
-            ],
+            forbidden=_COMMON_FORBIDDEN,
         )
     ]

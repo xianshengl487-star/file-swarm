@@ -180,6 +180,46 @@ def test_control_card_has_designed_copy_and_safety_banner():
             patches.append(self._patch_from_strings(old, new, "tests/test_clicker_design.py"))
         return "\n".join(patches)
 
+    def _extract_context_file(self, text: str) -> tuple[str, str]:
+        """Return (file_path, current_content) from the READ_ONLY_CONTEXT block."""
+        # Try both old and new prompt formats
+        for marker in ("READ_ONLY_CONTEXT:\n", "READ_ONLY_CONTEXT_FILES:\n"):
+            if marker in text:
+                block = text.split(marker, 1)[1]
+                lines = block.splitlines()
+                file_path = ""
+                content_lines: list[str] = []
+                in_content = False
+                for line in lines:
+                    if line.startswith("FILE: "):
+                        file_path = line[len("FILE: "):].strip()
+                        continue
+                    if line.startswith("```"):
+                        if in_content:
+                            break
+                        in_content = True
+                        continue
+                    if in_content:
+                        content_lines.append(line)
+                return file_path, "\n".join(content_lines)
+        return "", ""
+
+    def _generic_append_patch(self, file_path: str, current_content: str) -> str:
+        """Generate a diff that appends a harmless marker function to file_path.
+
+        If the file is missing/empty, create it with the marker function.
+        """
+        marker_name = "swarm_marker_" + file_path.replace("/", "_").replace(".", "_")
+        new_func = f"def {marker_name}() -> str:\n    return \"file-swarm marker\"\n"
+        if not current_content or current_content.strip() in {"", "<missing>", "<unreadable>"}:
+            new_content = f'"""file-swarm generated stub."""\n\n{new_func}\n'
+            return self._patch_from_strings("", new_content, file_path)
+        # Ensure exactly one trailing newline before appending, with a blank
+        # line separating the new function from existing content.
+        base = current_content.rstrip() + "\n"
+        new_content = base + "\n" + new_func
+        return self._patch_from_strings(base, new_content, file_path)
+
     async def chat(self, model: str, messages: list[dict], **kwargs) -> ProviderResult:
         user_text = "\n".join(str(message.get("content", "")) for message in messages)
         allowed_files = self._extract_allowed_files(user_text)
@@ -200,12 +240,14 @@ def test_control_card_has_designed_copy_and_safety_banner():
         elif "hello.py" in user_text and allowed_files:
             patch = self._hello_patch(allowed_files)
         elif allowed_files:
-            path = allowed_files[0]
-            patch = self._patch_from_strings(
-                "",
-                'def generated_message() -> str:\n    return "file-swarm mock run"\n',
-                path,
-            )
+            # Generic branch: append a marker function to the assigned file,
+            # using its current content (from read-only context) so the diff
+            # applies cleanly. Different slots/tasks touch different files,
+            # so merges never conflict.
+            target = allowed_files[0]
+            context_path, context_content = self._extract_context_file(user_text)
+            current = context_content if context_path == target else ""
+            patch = self._generic_append_patch(target, current)
         else:
             path = "src/file_swarm/mock_generated.py"
             patch = self._patch_from_strings(

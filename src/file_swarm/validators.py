@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -26,6 +27,17 @@ def detect_test_command(root: Path) -> str | None:
     return None
 
 
+def _pytest_available() -> bool:
+    """Probe whether pytest is importable by the current interpreter."""
+    proc = subprocess.run(
+        [sys.executable, "-c", "import pytest"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return proc.returncode == 0
+
+
 def run_validation(repo_root: Path, apply_mode: bool = False) -> ValidationResult:
     command = detect_test_command(repo_root)
     if command is None:
@@ -34,6 +46,13 @@ def run_validation(repo_root: Path, apply_mode: bool = False) -> ValidationResul
         return ValidationResult(command=command, status="skipped", stdout="", stderr="")
 
     if command == "pytest":
+        if not _pytest_available():
+            return ValidationResult(
+                command=command,
+                status="skipped",
+                stdout="",
+                stderr="pytest not installed in current interpreter; skipping validation",
+            )
         proc = subprocess.run(
             [sys.executable, "-m", "pytest", "-q"],
             cwd=repo_root,
@@ -42,10 +61,16 @@ def run_validation(repo_root: Path, apply_mode: bool = False) -> ValidationResul
             check=False,
         )
     elif command == "npm test":
+        if not shutil.which("npm"):
+            return ValidationResult(command=command, status="skipped", stdout="", stderr="npm not on PATH")
         proc = subprocess.run(["npm", "test"], cwd=repo_root, text=True, capture_output=True, check=False)
     elif command == "pnpm test":
+        if not shutil.which("pnpm"):
+            return ValidationResult(command=command, status="skipped", stdout="", stderr="pnpm not on PATH")
         proc = subprocess.run(["pnpm", "test"], cwd=repo_root, text=True, capture_output=True, check=False)
     else:
+        if not shutil.which("yarn"):
+            return ValidationResult(command=command, status="skipped", stdout="", stderr="yarn not on PATH")
         proc = subprocess.run(["yarn", "test"], cwd=repo_root, text=True, capture_output=True, check=False)
 
     status = "passed" if proc.returncode == 0 else "failed"

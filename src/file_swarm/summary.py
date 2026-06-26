@@ -153,5 +153,5 @@ def write_codex_summary(state: RunState) -> Path:
         f"  - file-swarm repair --run {state.run_id}",
     ]
     path = run_dir / "codex_summary.md"
-    path.write_text("\n".join(lines[:120]) + "\n", encoding="utf-8")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path

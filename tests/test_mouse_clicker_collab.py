@@ -1,6 +1,7 @@
 import json
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 from file_swarm.cli import apply as apply_run
@@ -53,7 +54,7 @@ def test_mouse_clicker_multi_task_collaboration(tmp_path: Path, monkeypatch) -> 
 
     apply_run(run=run_id, allow_dirty=True, no_validate=False, allow_fallback_apply=False)
 
-    proc = subprocess.run(["python", "-m", "pytest", "-q"], cwd=repo, capture_output=True, text=True, check=False)
+    proc = subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=repo, capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
     summary = (run_dir / "codex_summary.md").read_text(encoding="utf-8")

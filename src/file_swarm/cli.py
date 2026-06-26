@@ -198,8 +198,6 @@ def auto(
         ]
     ) + "\n"
     write_text(state.run_dir / "repo_map.md", repo_map)
-    write_text(state.run_dir / "hard_constraints.yaml", (state.run_dir / "hard_constraints.yaml").read_text(encoding="utf-8"))
-    write_text(state.run_dir / "interface_contract.yaml", (state.run_dir / "interface_contract.yaml").read_text(encoding="utf-8"))
     plan_text = build_plan(task, scan, hard_constraints, interface_contract)
     write_text(state.run_dir / "plan.md", plan_text)
     tasks = split_tasks(scan, task)

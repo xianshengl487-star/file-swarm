@@ -79,10 +79,33 @@ def guard_patch(
     reject_out_of_scope = bool(file_modification.get("reject_out_of_scope_patch", True))
     forbidden_files = {str(PurePosixPath(path)) for path in dependencies.get("forbidden_files", [])}
 
+    # ── Extract the actual diff from LLM output (same 3-style logic as
+    # patch_merger._extract_diff_block).
     if "```diff" in patch_text:
+        # Style 1 – explicit diff fence
         patch_text = patch_text.split("```diff", 1)[1]
         if "```" in patch_text:
-            patch_text = patch_text.rsplit("```", 1)[0]
+            patch_text = patch_text.split("```", 1)[0]
+    elif "```" in patch_text:
+        # Style 2 – bare ``` fence
+        _, _, after = patch_text.partition("```")
+        if "--- " in after:
+            patch_text = after
+            if "```" in patch_text:
+                patch_text = patch_text.split("```", 1)[0]
+    else:
+        # Style 3 – unfenced: grab from first --- line to next heading/fence
+        for prefix in ("\n--- a/", "\n--- "):
+            if prefix in patch_text:
+                idx = patch_text.index(prefix)
+                block = patch_text[idx + 1:]
+                cutoff = len(block)
+                for marker in ("\n## ", "\n```"):
+                    pos = block.find(marker)
+                    if pos != -1 and pos < cutoff:
+                        cutoff = pos
+                patch_text = block[:cutoff]
+                break
 
     stripped = patch_text.strip()
     if not stripped:

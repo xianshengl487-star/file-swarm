@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
+
+from .patch_normalizer import normalize_patch
 
 
 @dataclass(slots=True)
@@ -22,18 +25,52 @@ def _load_guarded_patch_paths(run_dir: Path) -> list[Path]:
         guard_path = guard_dir / f"{patch_path.stem}.guard.json"
         if not guard_path.exists():
             continue
-        payload = guard_path.read_text(encoding="utf-8")
-        if '"passed": true' in payload:
+        try:
+            payload = json.loads(guard_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        if payload.get("passed") is True:
             selected.append(patch_path)
     return selected
 
 
 def _extract_diff_block(text: str) -> str:
+    """Extract a unified-diff block from provider output.
+
+    Handles three common LLM output styles:
+    1.  Fenced:   ``diff ... ``  (OpenAI-compatible models)
+    2.  Bare:     ``` without language tag, then diff lines, then ```
+    3.  Unfenced: plain diff lines mixed with markdown (Mimo, some GLMs)
+    """
     if "```diff" in text:
+        # Style 1 – explicit diff fence
         block = text.split("```diff", 1)[1]
         if "```" in block:
-            block = block.rsplit("```", 1)[0]
+            block = block.split("```", 1)[0]
         return block.strip() + "\n"
+
+    # Style 2 – some models use plain ``` without language tag
+    if "```" in text:
+        _, _, after = text.partition("```")
+        if "--- " in after:
+            block = after
+            if "```" in block:
+                block = block.split("```", 1)[0]
+            return block.strip() + "\n"
+
+    # Style 3 – unfenced: scan for the first --- a/ or diff --git line,
+    # take everything until the next markdown heading or fence.
+    for prefix in ("\n--- a/", "\n--- b/", "\ndiff --git ", "\n--- "):
+        if prefix in text:
+            idx = text.index(prefix)
+            block = text[idx + 1:]  # skip the leading newline, keep ---
+            cutoff = len(block)
+            for marker in ("\n## ", "\n```"):
+                pos = block.find(marker)
+                if pos != -1 and pos < cutoff:
+                    cutoff = pos
+            return block[:cutoff].strip() + "\n"
+
     return text.strip() + "\n"
 
 
@@ -46,6 +83,22 @@ def _modified_files_from_patch(patch_text: str) -> list[str]:
                 raw = raw[2:]
             files.append(raw)
     return files
+
+
+def _normalize_patch_paths(patch_text: str) -> str:
+    """Ensure ---/+++ lines carry a/ and b/ prefixes (some LLMs omit them)."""
+    lines = patch_text.splitlines()
+    out: list[str] = []
+    for line in lines:
+        if line.startswith("--- ") and not line.startswith("--- a/") and not line.startswith("--- /dev/null"):
+            path = line[4:].strip()
+            out.append(f"--- a/{path}")
+        elif line.startswith("+++ ") and not line.startswith("+++ b/") and not line.startswith("+++ /dev/null"):
+            path = line[4:].strip()
+            out.append(f"+++ b/{path}")
+        else:
+            out.append(line)
+    return "\n".join(out) + "\n"
 
 
 def merge_patches(run_dir: Path) -> MergeResult:
@@ -62,8 +115,12 @@ def merge_patches(run_dir: Path) -> MergeResult:
     modified_files: list[str] = []
 
     for patch_path in patch_paths:
-        patch_text = _extract_diff_block(patch_path.read_text(encoding="utf-8"))
-        files = _modified_files_from_patch(patch_text)
+        raw = patch_path.read_text(encoding="utf-8")
+        norm = normalize_patch(raw)
+        if not norm.ok:
+            continue  # skip patches that can't be normalized
+        patch_text = norm.patch_text
+        files = norm.files
         overlap = seen_files.intersection(files)
         if overlap:
             merge_report_path.write_text(
