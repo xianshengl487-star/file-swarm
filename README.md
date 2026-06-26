@@ -4,6 +4,50 @@ Codex-controlled OpenAI-compatible file-level coding swarm.
 
 `file-swarm` is a lightweight orchestration scaffold for delegating code work to OpenAI-compatible model workers while keeping Codex in a final-supervisor role.
 
+## 中文简介
+
+`file-swarm` 是一个面向 OpenAI-compatible 模型的轻量级文件级并行编程调度系统。
+它的目标不是让 Codex 直接大规模改文件，而是让 Codex 负责规则、契约和最终验收，让下游模型负责生成补丁，再由本地调度器统一审查、合并和应用。
+
+### 中文定位
+
+- Codex 负责生成严格约束和接口契约。
+- `file-swarm` 负责扫描仓库、拆分任务、调度模型、守护补丁、合并结果和生成报告。
+- 下游 Worker 默认只返回 `unified diff patch`，不直接写文件。
+- 最终是否应用补丁，由 `file-swarm` 和 Codex 共同控制。
+
+### 中文核心概念
+
+- `Codex Lite Master`：最终监督者，只负责契约、报告和最终决策。
+- `Model Slot`：一个 `base_url + api_key_env` 组成的模型接入槽位。
+- `Model Worker`：绑定任务、槽位和模型的执行单元。
+- `Stateless Patch Worker`：默认 Worker 类型，只输出补丁，不直接改仓库。
+
+### 中文工作流
+
+1. 扫描仓库，生成仓库地图。
+2. 生成 `hard_constraints.yaml` 和 `interface_contract.yaml`。
+3. 拆分任务并调度 Worker。
+4. Worker 返回 patch。
+5. Patch 经过 Patch Guard。
+6. 合并 patch，生成 `final.patch`。
+7. 执行验证，生成 `codex_summary.md`。
+
+### 中文命令示例
+
+```bash
+file-swarm init
+file-swarm preflight
+file-swarm codex-contract "实现登录模块"
+file-swarm plan "实现登录模块"
+file-swarm dispatch --run <run_id>
+file-swarm guard --run <run_id>
+file-swarm merge --run <run_id>
+file-swarm auto "实现登录模块" --repo . --parallel 4 --dry-merge
+file-swarm summary --run <run_id> --for-codex
+file-swarm apply --run <run_id>
+```
+
 ## Project Goal
 
 The project focuses on a small, disciplined parallel coding workflow:
