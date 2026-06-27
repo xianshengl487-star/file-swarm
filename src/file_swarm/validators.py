@@ -59,6 +59,8 @@ def run_validation(repo_root: Path, apply_mode: bool = False) -> ValidationResul
             text=True,
             capture_output=True,
             check=False,
+            encoding="utf-8",
+            errors="replace",
         )
     elif command == "npm test":
         if not shutil.which("npm"):

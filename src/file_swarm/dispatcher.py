@@ -13,10 +13,12 @@ from .model_router import ModelRouter
 from .patch_guard import guard_patch
 from .patch_merger import MergeResult, merge_patches
 from .patch_normalizer import normalize_patch
+from .agent_executor import execute_agent_task, AgentResult
 from .providers.anthropic_provider import AnthropicProvider
 from .providers.base import ProviderResult
 from .providers.mock_provider import MockProvider
 from .providers.openai_compatible_provider import OpenAICompatibleProvider
+from .rate_limiter import RateLimiter, NVIDIA_NGC_CONFIG
 from .repo_scanner import scan_repo
 from .run_state import RunState
 from .slot_registry import SlotRegistry
@@ -179,6 +181,33 @@ async def _acquire_available_slot(
         await asyncio.sleep(0.05 if acquired_any else 0.05)
 
 
+# ── Global rate-limiter cache (shared across all slots for the same API) ──
+_rate_limiter_cache: dict[str, RateLimiter] = {}
+
+
+def _get_rate_limiter_for_url(base_url: str) -> RateLimiter | None:
+    """Return a shared rate limiter ONLY for NVIDIA APIs.
+
+    NVIDIA API enforces strict burst limits → needs rate limiting.
+    Other APIs (Mimo, etc.) have no concurrency restrictions → skip limiter.
+
+    Returns None for non-NVIDIA URLs and empty URLs.
+    """
+    if not base_url:
+        return None
+
+    # Only rate-limit NVIDIA endpoints
+    if "nvidia.com" not in base_url and "ngc.nvidia" not in base_url:
+        return None  # No rate limit for non-NVIDIA APIs
+
+    if base_url in _rate_limiter_cache:
+        return _rate_limiter_cache[base_url]
+
+    limiter = RateLimiter(config=NVIDIA_NGC_CONFIG)
+    _rate_limiter_cache[base_url] = limiter
+    return limiter
+
+
 def _provider_for_slot(slot: ModelSlot, registry: SlotRegistry):
     api_key = registry.env_value(slot.api_key_env)
     base_url = registry.resolve_base_url(slot) or ""
@@ -186,7 +215,8 @@ def _provider_for_slot(slot: ModelSlot, registry: SlotRegistry):
         return MockProvider(), "mock", None
     if slot.provider == "anthropic":
         return AnthropicProvider(base_url=base_url, api_key=api_key), "anthropic", api_key
-    return OpenAICompatibleProvider(base_url=base_url, api_key=api_key), "openai_compatible", api_key
+    limiter = _get_rate_limiter_for_url(base_url)
+    return OpenAICompatibleProvider(base_url=base_url, api_key=api_key, rate_limiter=limiter), "openai_compatible", api_key
 
 
 def _coerce_provider_result(result: ProviderResult | str, model: str, provider: str) -> ProviderResult:
@@ -212,6 +242,133 @@ def _ensure_dispatch_registry(registry: SlotRegistry) -> SlotRegistry:
     return SlotRegistry(slots={fallback.id: fallback})
 
 
+async def _run_agent_task(
+    state: RunState,
+    task: PlannedTask,
+    slot: ModelSlot,
+    model: str,
+    registry: SlotRegistry,
+    lease_manager: LeaseManager,
+    timeout_seconds: float,
+) -> TaskResult:
+    """Execute a non-programming agent task via shell commands."""
+    provider, provider_name, api_key = _provider_for_slot(slot, registry)
+    transcripts_dir = state.run_dir / "transcripts"
+    agent_dir = state.run_dir / "agent_results"
+    agent_dir.mkdir(parents=True, exist_ok=True)
+
+    append_timeline_event(
+        state.run_dir,
+        "agent_started",
+        {"task_id": task.task_id, "slot_id": slot.id, "model": model, "provider": provider_name},
+    )
+
+    # Build context from readonly files
+    context = ""
+    for cf in task.readonly_context_files:
+        p = state.root / cf
+        if p.exists():
+            context += f"\n{cf}:\n{p.read_text(encoding='utf-8', errors='replace')[:2000]}\n"
+
+    agent_result = await execute_agent_task(
+        task_id=task.task_id,
+        task_description=task.goal,
+        provider=provider,
+        model=model or slot.default_model,
+        cwd=state.root,
+        context=context,
+        timeout_per_command=int(timeout_seconds),
+        dry_run=False,
+    )
+
+    # Write results
+    result_path = agent_dir / f"{task.task_id}.agent.json"
+    result_path.write_text(
+        json.dumps(
+            {
+                "task_id": agent_result.task_id,
+                "ok": agent_result.ok,
+                "error": agent_result.error,
+                "model": agent_result.model,
+                "provider": agent_result.provider,
+                "input_tokens": agent_result.input_tokens,
+                "output_tokens": agent_result.output_tokens,
+                "summary": agent_result.summary,
+                "commands": [
+                    {
+                        "command": cr.command,
+                        "exit_code": cr.exit_code,
+                        "stdout": cr.stdout[:1000],
+                        "stderr": cr.stderr[:500],
+                        "duration_ms": cr.duration_ms,
+                        "blocked": cr.blocked,
+                        "block_reason": cr.block_reason,
+                    }
+                    for cr in agent_result.commands_executed
+                ],
+            },
+            indent=2,
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    # Write summary as "patch" placeholder (for transcript consistency)
+    write_text(transcripts_dir / f"{task.task_id}.output.md", agent_result.summary)
+    write_json(
+        state.run_dir / "guard_reports" / f"{task.task_id}.guard.json",
+        {
+            "task_id": task.task_id,
+            "passed": agent_result.ok,
+            "reason": "agent_executed" if agent_result.ok else (agent_result.error or "agent_failed"),
+            "modified_files": [],
+        },
+    )
+
+    # Log worker call
+    log_worker_call(
+        state.run_dir,
+        task.task_id,
+        task.goal,
+        agent_result.summary,
+        slot.id,
+        provider_name,
+        model or slot.default_model,
+        api_key,
+        "passed" if agent_result.ok else "failed",
+        task.assigned_files,
+        task.allowed_files,
+        [],
+        provider_ok=agent_result.ok,
+        provider_error=agent_result.error,
+        input_tokens=agent_result.input_tokens,
+        output_tokens=agent_result.output_tokens,
+    )
+
+    lease_manager.release(slot.id, task.task_id)
+    append_timeline_event(
+        state.run_dir,
+        "agent_finished",
+        {"task_id": task.task_id, "slot_id": slot.id, "model": model, "status": "passed" if agent_result.ok else "failed"},
+    )
+
+    return TaskResult(
+        task_id=task.task_id,
+        slot_id=slot.id,
+        model=model or slot.default_model,
+        provider=provider_name,
+        status="passed" if agent_result.ok else "failed",
+        patch_path=str(result_path),
+        modified_files=[],
+        error=agent_result.error,
+        provider_ok=agent_result.ok,
+        provider_error=agent_result.error,
+        input_tokens=agent_result.input_tokens,
+        output_tokens=agent_result.output_tokens,
+        is_mock=provider_name == "mock",
+    )
+
+
 async def _run_task(
     state: RunState,
     task: PlannedTask,
@@ -232,6 +389,14 @@ async def _run_task(
             "slot_acquired",
             {"task_id": task.task_id, "slot_id": slot.id, "model": model, "provider": slot.provider},
         )
+
+        # ── Route: agent_worker vs patch_worker ──────────────────
+        if task.task_type == "agent_worker":
+            return await _run_agent_task(
+                state, task, slot, model, registry, lease_manager, timeout_seconds,
+            )
+
+        # ── Normal patch worker flow ─────────────────────────────
         worker_input = _build_worker_input(state, task, scan_repo(state.root), hard_constraints_yaml, interface_contract_yaml, repo_map)
         prompt = worker_input
         patches_dir = state.run_dir / "patches"

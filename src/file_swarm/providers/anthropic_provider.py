@@ -33,9 +33,7 @@ class AnthropicProvider:
 
     async def chat(self, model: str, messages: list[dict], **kwargs: Any) -> ProviderResult:
         client = self._client()
-        # Anthropic separates system prompt from messages; extract the first
-        # user message content as the main prompt and put contracts/rules in
-        # the system slot so the model gives them proper weight.
+        # Anthropic separates system prompt from messages.
         system_parts: list[str] = []
         user_parts: list[str] = []
         for msg in messages:
@@ -52,9 +50,20 @@ class AnthropicProvider:
                 user_parts.append(content)
 
         prompt = "\n\n".join(user_parts)
-        system = "\n\n".join(system_parts) if system_parts else "You are a stateless patch worker."
+        if system_parts:
+            system = "\n\n".join(system_parts)
+        else:
+            # Detect task type from the prompt content
+            if "JSON array" in prompt or "shell commands" in prompt.lower() or "system agent" in prompt.lower():
+                system = "You are a system agent. Respond ONLY with the requested format."
+            else:
+                system = "You are a stateless patch worker. Return ONLY unified diff patches."
 
         max_tokens = kwargs.pop("max_tokens", 2048)
+        # Anthropic models may consume tokens for internal reasoning/thinking;
+        # add headroom so the actual text output is not truncated.
+        if max_tokens < 1024:
+            max_tokens = 1024
         try:
             response = await client.messages.create(
                 model=model,

@@ -61,7 +61,7 @@ def test_patch_guard_rejects_absolute_paths_and_secrets() -> None:
         "+++ b/src/demo_math.py\n"
         "@@ -1,1 +1,2 @@\n"
         " print('x')\n"
-        "+API_KEY=tp-c98t9w8a54jyuairbgx602j9g19xwwwkpd9g62jj0j2pudrj\n"
+        "+API_KEY=tp-fakefakefakefakefakefakefakefake\n"
     )
 
     abs_result = guard_patch(absolute_patch, ["C:/temp/evil.py"])

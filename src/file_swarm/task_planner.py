@@ -44,6 +44,63 @@ _COMMON_FORBIDDEN = [
     "Return unified diff patch only",
 ]
 
+_AGENT_FORBIDDEN = [
+    "Do not execute destructive commands (rm -rf, format, shutdown)",
+    "Do not modify system files or registry",
+    "Do not install software without permission",
+    "Do not expose secrets in command output",
+]
+
+
+def split_agent_tasks(user_request: str, scan: RepoScanResult) -> list[PlannedTask]:
+    """Plan agent_worker tasks for non-programming requests.
+
+    Only triggers when the request is clearly a system/ops task, not code.
+    """
+    normalized = user_request.lower()
+
+    # Hard exclusion: if any coding keyword present, NOT an agent task
+    coding_keywords = [
+        "实现", "implement", "refactor", "fix bug", "patch", "函数", "function",
+        "def ", "class ", "import ", "subtract", "clicker", "add test",
+        "todo", "stub", "pass\n",
+    ]
+    if any(kw in normalized for kw in coding_keywords):
+        return []
+
+    # Strong agent signals: these phrases clearly indicate non-coding tasks
+    agent_phrases = [
+        "检查系统", "运行命令", "执行命令", "系统报告", "系统诊断",
+        "电脑操控", "电脑操作", "管理",
+        "check system", "run command", "execute command", "system report",
+        "system diagnose", "computer control", "list files", "show status",
+        "monitor", "deploy", "build project", "run tests", "clean up",
+        "check disk", "network status", "process list",
+    ]
+
+    is_agent = any(phrase in normalized for phrase in agent_phrases)
+
+    if not is_agent:
+        return []
+
+    # Single agent task for the whole request
+    context_files = []
+    if scan.config_files:
+        context_files = scan.config_files[:2]
+
+    return [
+        PlannedTask(
+            task_id="agent_001",
+            task_type="agent_worker",
+            assigned_files=[],
+            allowed_files=[],
+            readonly_context_files=context_files,
+            goal=user_request,
+            requirements=["Execute commands safely and report results."],
+            forbidden=_AGENT_FORBIDDEN,
+        )
+    ]
+
 
 def _collect_source_files(scan: RepoScanResult) -> list[str]:
     """Pick concrete source files (not __init__, not __pycache__) for per-file tasks."""
@@ -65,6 +122,12 @@ def _collect_source_files(scan: RepoScanResult) -> list[str]:
 
 def split_tasks(scan: RepoScanResult, user_request: str) -> list[PlannedTask]:
     normalized = user_request.lower()
+
+    # ── Check for agent (non-coding) tasks first ──────────────
+    agent_tasks = split_agent_tasks(user_request, scan)
+    if agent_tasks:
+        return agent_tasks
+
     if ("mouse clicker" in normalized or "auto clicker" in normalized or "连点器" in normalized) and {
         "src/clicker_core.py",
         "src/clicker_ui.py",
