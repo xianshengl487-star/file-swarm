@@ -1,229 +1,376 @@
 # file-swarm
 
-Codex-controlled OpenAI-compatible file-level coding swarm.
+Codex-controlled, OpenAI-compatible, file-level coding swarm.
 
-`file-swarm` is a lightweight orchestration scaffold for delegating code work to OpenAI-compatible model workers while keeping Codex in a final-supervisor role.
+中文定位：由 Codex 轻量主控的、OpenAI 兼容模型驱动的、文件级并行编程系统。
 
-## 中文简介
+`file-swarm` is not another agent that blindly edits your repository. It is an orchestration layer:
 
-`file-swarm` 是一个面向 OpenAI-compatible 模型的轻量级文件级并行编程调度系统。
-它的目标不是让 Codex 直接大规模改文件，而是让 Codex 负责规则、契约和最终验收，让下游模型负责生成补丁，再由本地调度器统一审查、合并和应用。
-
-### 中文定位
-
-- Codex 负责生成严格约束和接口契约。
-- `file-swarm` 负责扫描仓库、拆分任务、调度模型、守护补丁、合并结果和生成报告。
-- 下游 Worker 默认只返回 `unified diff patch`，不直接写文件。
-- 最终是否应用补丁，由 `file-swarm` 和 Codex 共同控制。
-
-### 中文核心概念
-
-- `Codex Lite Master`：最终监督者，只负责契约、报告和最终决策。
-- `Model Slot`：一个 `base_url + api_key_env` 组成的模型接入槽位。
-- `Model Worker`：绑定任务、槽位和模型的执行单元。
-- `Stateless Patch Worker`：默认 Worker 类型，只输出补丁，不直接改仓库。
-
-### 中文工作流
-
-1. 扫描仓库，生成仓库地图。
-2. 生成 `hard_constraints.yaml` 和 `interface_contract.yaml`。
-3. 拆分任务并调度 Worker。
-4. Worker 返回 patch。
-5. Patch 经过 Patch Guard。
-6. 合并 patch，生成 `final.patch`。
-7. 执行验证，生成 `codex_summary.md`。
-
-### 中文命令示例
-
-```bash
-file-swarm init
-file-swarm preflight
-file-swarm codex-contract "实现登录模块"
-file-swarm plan "实现登录模块"
-file-swarm dispatch --run <run_id>
-file-swarm guard --run <run_id>
-file-swarm merge --run <run_id>
-file-swarm auto "实现登录模块" --repo . --parallel 4 --dry-merge
-file-swarm summary --run <run_id> --for-codex
-file-swarm apply --run <run_id>
+```text
+Codex defines rules.
+Model workers return patches or structured actions.
+file-swarm enforces leases, guards, summaries, and validation.
+Codex decides whether to apply.
 ```
 
-## Project Goal
+## What It Does
 
-The project focuses on a small, disciplined parallel coding workflow:
+`file-swarm` now has two coordinated modes.
 
-- Codex generates hard constraints and interface contracts.
-- File-swarm orchestrates planning, dispatch, guard checks, merging, validation, and summary.
-- Model workers only return unified diff patches by default.
-- Final application decisions stay under Codex control.
+| Mode | Skill | Purpose | Output |
+| --- | --- | --- | --- |
+| Patch Swarm | `$file-swarm` | Split coding work into file-level guarded patch workers | `final.patch`, transcripts, guard reports, summary |
+| Action Agent | `$file-swarm-agent` | Ask a model to plan typed shell/browser/mouse/MCP actions safely | action result summaries, dry-run benchmark reports |
 
-## Why Codex Does Less Work
+The project is designed for OpenAI-compatible endpoints, local mock slots, and provider adapters such as OpenAI-compatible Chat Completions and Anthropic-style Messages APIs.
 
-`file-swarm` is designed so Codex does not directly modify repository files in the normal workflow.
-Instead, downstream models produce unified diff patches, and the orchestrator decides whether a patch can be applied.
+## Why It Exists
 
-## Core Roles
+Direct AI coding is fast, but it can be hard to audit at scale.
 
-### Codex Lite Master
+`file-swarm` adds the missing control plane:
 
-The final supervisor that produces:
+- explicit file ownership per task
+- slot lease isolation
+- model/task visibility
+- Patch Guard before merge
+- reproducible `final.patch`
+- `codex_summary.md` for apply decisions
+- optional agent action execution with dry-run safety
 
-- `hard_constraints.yaml`
-- `interface_contract.yaml`
-- the final supervision decision
-
-### Model Slot
-
-A model slot is a single `base_url + api_key_env` configuration for one OpenAI-compatible provider endpoint.
-
-### Model Worker
-
-A worker is a runtime task executor bound to:
-
-- a task
-- a slot
-- a model
-
-### Stateless Patch Worker
-
-The default worker type.
-It does not directly write files and instead returns unified diff patches.
-
-## OpenAI-compatible Model Support
-
-The project is designed to work with any OpenAI-compatible Chat Completions API, including:
-
-- DeepSeek
-- GLM
-- Qwen
-- Kimi
-- MiniMax
-- Gemini
-- OpenAI-compatible proxies
-- LiteLLM
-- vLLM
-- Ollama
-
-Support is interface-first: this repository ships the contract and scaffolding, not real model calls.
-
-## Core Workflow
+## Architecture
 
 ```mermaid
 flowchart LR
-  A[Codex Lite Master] --> B[hard_constraints.yaml]
-  A --> C[interface_contract.yaml]
-  B --> D[file-swarm Orchestrator]
-  C --> D
-  D --> E[Model Slot Registry]
-  E --> F[OpenAI-Compatible Model Workers]
-  F --> G[Patch Guard]
-  G --> H[Patch Merger]
-  H --> I[Validator]
-  I --> J[Codex Final Supervisor]
+  U["User request"] --> C["Codex controller"]
+  C --> HC["hard_constraints.yaml"]
+  C --> IC["interface_contract.yaml"]
+  HC --> O["file-swarm orchestrator"]
+  IC --> O
+  O --> P["Task planner"]
+  P --> R["Model slot registry"]
+  R --> L["Lease manager"]
+  L --> W1["Patch worker"]
+  L --> W2["Patch worker"]
+  L --> A1["Agent worker"]
+  W1 --> G["Patch Guard"]
+  W2 --> G
+  G --> M["Patch merger"]
+  M --> F["final.patch"]
+  A1 --> AR["Action report"]
+  F --> V["Validator"]
+  V --> S["codex_summary.md"]
+  AR --> S
 ```
 
-## Safety Mechanisms
+## Core Features
 
-- visible transcripts
-- slot preflight checks
-- patch guard enforcement
-- scope-limited file assignment
-- secret redaction
-- dry-merge default behavior
+### Patch Swarm
 
-## Communication Visibility
+- Uses `asyncio` dispatch with real global `--parallel N`.
+- Leases model slots before worker start.
+- Avoids reusing busy slots.
+- Writes visible transcripts for every worker.
+- Normalizes LLM patch output before guard/merge.
+- Rejects unsafe or out-of-scope patches.
+- Produces `final.patch` only from guard-passed patches.
 
-All important orchestration steps are written to disk in transcript files so the workflow stays inspectable.
+### Agent Action Mode
 
-## Patch Guard
+`file-swarm-agent` extends the system beyond patch generation. It supports model-planned structured actions:
 
-Patch Guard is the gatekeeper that checks:
+```text
+shell
+browser_open
+browser_fetch
+mouse_click
+mouse_move
+mouse_drag
+key_type
+key_press
+key_hotkey
+screenshot
+mcp_call
+wait
+```
 
-- scope
-- file assignment
-- file creation rules
-- secret redaction
-- dependency restrictions
+Use this mode for non-coding automation, diagnostics, dry-run computer control, and model action benchmarks. It is safety-first: destructive commands are blocked, secrets are filtered, output is capped, and benchmarks default to dry-run behavior.
 
-Only guarded patches can move toward merge and application.
+### Provider Support
 
-## MVP Roadmap
+- `mock`: deterministic local testing
+- `openai_compatible`: Chat Completions compatible endpoints
+- `anthropic`: Anthropic-style Messages API endpoints
 
-1. Scaffold repository and CLI commands.
-2. Add configuration samples and contract data models.
-3. Implement slot registry and lease management.
-4. Add patch guard and patch merger.
-5. Add validation and summary reporting.
-6. Grow toward real multi-worker orchestration.
+Provider failures return structured `ProviderResult` objects instead of raw uncaught exceptions.
 
 ## Installation
 
-```bash
-pip install -e .
-```
-
-## Configuration
-
-The repository uses environment-variable-based keys.
-
-Create the following environment variables locally:
-
-- `MIMO_API_KEY_01`
-- `NVIDIA_API_KEY_01`
-- `NVIDIA_API_KEY_02`
-- `NVIDIA_API_KEY_03`
-- `NVIDIA_API_KEY_04`
-- `NVIDIA_API_KEY_05`
-- `NVIDIA_API_KEY_06`
-
-You can use `.env.example` as a checklist, but do not commit real key values.
-
-The local slot registry lives at `.swarm/config/model_slots.yaml`.
-It now points to:
-
-- a Mimo slot at `https://token-plan-cn.xiaomimimo.com/v1`
-- NVIDIA-compatible slots at `https://integrate.api.nvidia.com/v1`
-
-If you want to activate them in PowerShell for the current session, set the variables manually in your shell before running `file-swarm preflight` or `file-swarm auto`.
-
-## CLI
+This package is currently installed from source, not PyPI:
 
 ```bash
-file-swarm init
-file-swarm preflight
-file-swarm codex-contract
-file-swarm plan
-file-swarm dispatch
-file-swarm guard
-file-swarm merge
-file-swarm auto
-file-swarm summary
-file-swarm apply
-file-swarm repair
+git clone https://github.com/xianshengl487-star/file-swarm.git
+cd file-swarm
+python -m pip install -e .
 ```
 
-Example workflow:
+Verify:
 
 ```bash
-file-swarm init
-file-swarm preflight
-file-swarm codex-contract "实现登录模块"
-file-swarm auto "实现登录模块" --repo . --parallel 8 --dry-merge
-file-swarm summary --for-codex
-file-swarm apply --run <run_id>
+file-swarm --help
+python -m pytest -q
 ```
 
-## Stable Pre-Live Behavior
+Expected current test status:
 
-- Multi-slot dispatch leases a slot before worker start, skips busy slots, respects `--parallel N`, and writes `slot_acquired`, `worker_started`, `worker_finished`, and `slot_released` events to `timeline.jsonl`.
-- `file-swarm smoke-test --repo . --live` never fabricates a passing patch from local fallback output. Live mode must receive a real unified diff from the configured provider.
-- `file-swarm apply --run <run_id>` requires a non-empty `final.patch`, passed guard reports, and a clean git worktree unless `--allow-dirty` is supplied. `git apply` is the default path; custom fallback requires `--allow-fallback-apply`.
-- `file-swarm summary --run <run_id> --for-codex` writes `codex_summary.md` with slots, models, modified files, guard status, validation/apply status, repair need, and `recommend_apply`.
-- `file-swarm repair --run <run_id>` creates repair inputs for rejected or failed tasks, includes both contracts, asks a provider for a corrected patch, reruns Patch Guard, and writes `repair_report.md`.
+```text
+38 passed
+```
 
-## Command Output Philosophy
+## Quick Start
 
-Each command prints a clear planned-state message first, because this repository currently exposes the scaffold before the full orchestration engine.
+```bash
+file-swarm init --repo .
+file-swarm preflight --repo .
+file-swarm codex-contract "Add a feature safely" --repo .
+file-swarm auto "Add a feature safely" --repo . --parallel 3 --dry-merge
+file-swarm summary --run <run_id> --for-codex
+```
+
+Apply only after reading the summary:
+
+```bash
+file-swarm apply --run <run_id> --allow-dirty
+```
+
+Repair rejected or failed work:
+
+```bash
+file-swarm repair --run <run_id>
+```
+
+## Live Provider Checks
+
+Never write API keys into files. Use environment variables referenced by `api_key_env`.
+
+```bash
+file-swarm preflight --repo . --live
+file-swarm smoke-test --repo . --live
+```
+
+Live smoke-test is strict: if the model does not return a real unified diff, the run fails. It does not fabricate a passing patch.
+
+## Model Slot Configuration
+
+Slots live in:
+
+```text
+.swarm/config/model_slots.yaml
+```
+
+Example:
+
+```yaml
+model_slots:
+  - id: nvidia_glm
+    provider: openai_compatible
+    base_url: https://integrate.api.nvidia.com/v1
+    api_key_env: NVIDIA_API_KEY_01
+    enabled: true
+    allowed_models:
+      - z-ai/glm-5.1
+    default_model: z-ai/glm-5.1
+    max_concurrent_tasks: 1
+```
+
+Lease rules:
+
+- a slot must be acquired before a worker starts
+- busy slots are skipped
+- `max_concurrent_tasks` is respected
+- task completion, failure, and timeout release the lease
+
+## Run Artifacts
+
+Every run writes inspectable files under:
+
+```text
+.swarm/runs/<run_id>/
+```
+
+Important files:
+
+| File | Purpose |
+| --- | --- |
+| `file_tasks.json` | planned file-level or agent tasks |
+| `dispatch_report.json` | which slot/model/provider handled each task |
+| `timeline.jsonl` | `slot_acquired`, `worker_started`, `worker_finished`, `slot_released` |
+| `transcripts/*.input.md` | exact worker prompts |
+| `transcripts/*.output.md` | exact model responses |
+| `transcripts/*.meta.json` | token, provider, slot, model metadata |
+| `guard_reports/*.guard.json` | Patch Guard result per task |
+| `final.patch` | merged guarded patch |
+| `codex_summary.md` | apply recommendation for Codex |
+
+## Showing Which Model Did What
+
+Read `dispatch_report.json` and report:
+
+```text
+task_id | file(s) | slot | model | provider | status
+task_001 | src/orders.py | mock_alpha | mock-model | mock | passed
+task_002 | src/pricing.py | nvidia_glm | z-ai/glm-5.1 | openai_compatible | passed
+```
+
+This is the core advantage over direct editing: the work is traceable.
+
+## Medium Project Comparison
+
+I ran a controlled medium-sized Python project comparison on June 27, 2026.
+
+Task:
+
+```text
+Add a safe marker function to each FlowKit source module while preserving behavior and tests.
+```
+
+Project shape:
+
+- 6 source modules
+- 1 test module
+- git-initialized project
+- no real API keys
+
+Results:
+
+| Metric | file-swarm | Codex direct |
+| --- | --- | --- |
+| Source files changed | 6 | 6 |
+| Tasks/work units | 6 file-level workers | 1 direct edit pass |
+| Slots used | `mock_alpha`, `mock_beta`, `mock_gamma` | none |
+| Models used | `mock-model` | none |
+| Patch Guard | yes, per task | no |
+| Transcripts | yes | no |
+| Final patch artifact | yes | git diff only |
+| Apply recommendation | `recommend_apply: yes` | not applicable |
+| Test result | `1 passed` | `1 passed` |
+| Measured edit/auto time | 1.23s auto orchestration | 0.01s direct edit |
+
+Conclusion:
+
+- `file-swarm` is better when auditability, parallel model assignment, safe patch gates, and reproducible reports matter.
+- Direct Codex editing is faster for simple, trusted, local changes.
+- The best workflow is hybrid: Codex defines constraints and decides; file-swarm handles parallel guarded work; Codex can still directly handle tiny or urgent edits.
+
+Full report:
+
+[docs/swarm-vs-codex-comparison.md](docs/swarm-vs-codex-comparison.md)
+
+## Agent Dry-Run Result
+
+I also ran an action-agent dry-run using the latest `$file-swarm-agent` contract.
+
+| Metric | Result |
+| --- | --- |
+| Provider | fake local provider |
+| Model | fake-action-model |
+| Actions planned | 4 |
+| Action types | `shell`, `mcp_call`, `mcp_call`, `browser_fetch` |
+| Blocked actions | 0 |
+| Mode | dry run |
+
+This validates the action pipeline without executing real shell/browser side effects.
+
+## Patch Guard
+
+Patch Guard rejects:
+
+- empty patches
+- edits outside `allowed_files`
+- `.env` and `.env.local`
+- `package.json`
+- `pyproject.toml`
+- `requirements.txt`
+- lockfiles
+- absolute paths
+- file deletions unless explicitly allowed
+- suspected API keys or tokens
+
+## Apply Safety
+
+`file-swarm apply` checks:
+
+- `final.patch` exists
+- `final.patch` is non-empty
+- guard reports passed
+- rejected patches are not applied
+- git worktree is clean unless `--allow-dirty`
+- `before_apply.diff` is written
+- validation runs unless `--no-validate`
+
+Default apply path is `git apply`. Fallback apply requires explicit opt-in.
+
+## Skills
+
+Installable Codex skills are included:
+
+```text
+.claude/skills/file-swarm/SKILL.md
+.claude/skills/file-swarm-agent/SKILL.md
+```
+
+Use them like:
+
+```text
+Use $file-swarm to split this coding task into guarded patch workers and report which model handled each file.
+```
+
+```text
+Use $file-swarm-agent to run a dry-run structured action benchmark and summarize the safest model choices.
+```
+
+## Benchmark Notes
+
+The included benchmark files are dry-run oriented and read keys only from environment variables:
+
+```text
+NVIDIA_API_KEY
+NVIDIA_API_KEY_01
+NVIDIA_API_KEY_02
+MIMO_API_KEY
+MIMO_API_KEY_01
+```
+
+No benchmark should require committing a real key.
+
+Current benchmark report in this repository is environment-specific. It should not be read as a universal model ranking.
+
+## Recommended Workflow
+
+1. Use Codex to define the task and constraints.
+2. Run `file-swarm preflight`.
+3. Run `file-swarm auto --dry-merge`.
+4. Inspect `dispatch_report.json` and `codex_summary.md`.
+5. Apply only when the summary recommends it.
+6. Run validation.
+7. Use `repair` for failed or rejected tasks.
+
+## When To Use file-swarm
+
+Use it for:
+
+- medium-to-large multi-file changes
+- model comparison
+- multi-provider coding experiments
+- strict audit trails
+- controlled patch-only workflows
+- dry-run agent action testing
+
+Prefer direct Codex editing for:
+
+- tiny one-file edits
+- fast local refactors with low risk
+- tasks where orchestration overhead is not justified
 
 ## License
 

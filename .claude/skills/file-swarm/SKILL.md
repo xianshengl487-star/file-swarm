@@ -19,6 +19,23 @@ Codex decides whether to apply.
 
 Do not bypass Patch Guard by editing target repo files directly unless the user explicitly asks for manual implementation.
 
+## Integrated Skill Pair
+
+Use this skill together with `$file-swarm-agent` when the request mixes coding and structured actions.
+
+- Use `$file-swarm` for guarded file-level coding patches.
+- Use `$file-swarm-agent` for non-patch actions such as shell diagnostics, browser fetches, screenshot plans, mouse/keyboard dry-runs, and MCP-style tool calls.
+- Keep coding work in patch workers unless the user explicitly asks for real action execution.
+- Keep action work in dry-run mode unless the user explicitly approves side effects.
+
+Decision rule:
+
+```text
+Coding task that should change repository files -> file-swarm patch worker
+System/browser/mouse/MCP task that should execute or simulate actions -> file-swarm-agent
+Mixed request -> run patch workflow first, then action dry-run/benchmark/report as supporting evidence
+```
+
 ## Quick Start
 
 Run from the target repository root:
