@@ -320,6 +320,31 @@ Full report:
 
 [docs/large-task-glm-mimo-benchmark.md](docs/large-task-glm-mimo-benchmark.md)
 
+### 2026-06-27 Large Task Rerun
+
+After the Mimo endpoint and NVIDIA failover hardening, I reran a larger Nebula3D project test. Live keys were not present in the process, user environment, or machine environment, so the rerun used deterministic mock slots named after the intended live models.
+
+Result:
+
+```text
+run_id: 20260627051856138848
+mode: mock
+tasks: 12/12 passed
+guard: 12 passed, 0 rejected
+parallel: 3
+max_active_workers: 3
+slots used: mock_glm_primary, mock_mimo_pro, mock_mimo_multimodal
+models used: z-ai/glm-5.1, mimo-v2.5-pro, mimo-v2.5
+final.patch: generated, 108 lines
+apply: git apply succeeded
+pytest after apply: 3 passed
+slot overlap: none
+```
+
+Full rerun report:
+
+[docs/large-task-rerun-2026-06-27.md](docs/large-task-rerun-2026-06-27.md)
+
 ## Live 3D Web Benchmark
 
 A larger live 3D Web benchmark was also run with NVIDIA `z-ai/glm-5.1`.
