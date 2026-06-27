@@ -124,7 +124,7 @@ python -m pytest -q
 Expected current test status:
 
 ```text
-41 passed
+45 passed
 ```
 
 ## Quick Start
@@ -292,6 +292,26 @@ Direct Codex editing was faster on the same mechanical task (`0.046s` vs `1.159s
 Full report:
 
 [docs/large-task-glm-mimo-benchmark.md](docs/large-task-glm-mimo-benchmark.md)
+
+## Live 3D Web Benchmark
+
+A larger live 3D Web benchmark was also run with NVIDIA `z-ai/glm-5.1`.
+
+Result summary:
+
+```text
+NVIDIA smoke-test: passed
+Mimo preflight: failed, empty response
+best live implementation: 12/13 source expectations
+final npm test: failed due missing CSS variable
+main bottleneck: NVIDIA rate_limit during 13-task retry
+```
+
+The run was intentionally not marked as a fake success. It exposed real limits and produced planner/validator fixes.
+
+Full report:
+
+[docs/live-3d-web-benchmark.md](docs/live-3d-web-benchmark.md)
 
 ## Agent Dry-Run Result
 

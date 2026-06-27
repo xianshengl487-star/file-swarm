@@ -36,7 +36,7 @@ def _load_tasks(run_dir: Path, scan, user_request: str) -> list[PlannedTask]:
     tasks_path = run_dir / "file_tasks.json"
     if not tasks_path.exists():
         return split_tasks(scan, user_request)
-    payload = json.loads(tasks_path.read_text(encoding="utf-8"))
+    payload = json.loads(tasks_path.read_text(encoding="utf-8-sig"))
     tasks: list[PlannedTask] = []
     for item in payload:
         tasks.append(

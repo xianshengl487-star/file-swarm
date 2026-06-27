@@ -102,13 +102,16 @@ def split_agent_tasks(user_request: str, scan: RepoScanResult) -> list[PlannedTa
     ]
 
 
+_SOURCE_EXTENSIONS = {".py", ".js", ".jsx", ".ts", ".tsx", ".css", ".html"}
+
+
 def _collect_source_files(scan: RepoScanResult) -> list[str]:
-    """Pick concrete source files (not __init__, not __pycache__) for per-file tasks."""
+    """Pick concrete source/web files for per-file tasks."""
     ignored_basenames = {"__init__.py", "conftest.py"}
     collected: list[str] = []
     source_prefixes = tuple(f"{d}/" for d in scan.source_dirs) if scan.source_dirs else ("",)
     for path in scan.files:
-        if not path.endswith(".py"):
+        if Path(path).suffix not in _SOURCE_EXTENSIONS:
             continue
         if any(path.startswith(f"{d}/") for d in scan.test_dirs):
             continue
@@ -187,7 +190,7 @@ def split_tasks(scan: RepoScanResult, user_request: str) -> list[PlannedTask]:
     # This lets the dispatcher spread tasks across multiple slots (different
     # APIs) so each "pseudo-agent" works on a different file in parallel.
     source_files = _collect_source_files(scan)
-    max_tasks = 8
+    max_tasks = 16
     if source_files:
         source_files = source_files[:max_tasks]
         tasks: list[PlannedTask] = []

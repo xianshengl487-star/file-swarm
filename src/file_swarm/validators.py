@@ -63,17 +63,20 @@ def run_validation(repo_root: Path, apply_mode: bool = False) -> ValidationResul
             errors="replace",
         )
     elif command == "npm test":
-        if not shutil.which("npm"):
+        npm_bin = shutil.which("npm")
+        if not npm_bin:
             return ValidationResult(command=command, status="skipped", stdout="", stderr="npm not on PATH")
-        proc = subprocess.run(["npm", "test"], cwd=repo_root, text=True, capture_output=True, check=False)
+        proc = subprocess.run([npm_bin, "test"], cwd=repo_root, text=True, capture_output=True, check=False)
     elif command == "pnpm test":
-        if not shutil.which("pnpm"):
+        pnpm_bin = shutil.which("pnpm")
+        if not pnpm_bin:
             return ValidationResult(command=command, status="skipped", stdout="", stderr="pnpm not on PATH")
-        proc = subprocess.run(["pnpm", "test"], cwd=repo_root, text=True, capture_output=True, check=False)
+        proc = subprocess.run([pnpm_bin, "test"], cwd=repo_root, text=True, capture_output=True, check=False)
     else:
-        if not shutil.which("yarn"):
+        yarn_bin = shutil.which("yarn")
+        if not yarn_bin:
             return ValidationResult(command=command, status="skipped", stdout="", stderr="yarn not on PATH")
-        proc = subprocess.run(["yarn", "test"], cwd=repo_root, text=True, capture_output=True, check=False)
+        proc = subprocess.run([yarn_bin, "test"], cwd=repo_root, text=True, capture_output=True, check=False)
 
     status = "passed" if proc.returncode == 0 else "failed"
     return ValidationResult(command=command, status=status, stdout=proc.stdout, stderr=proc.stderr)
