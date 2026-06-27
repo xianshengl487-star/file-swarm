@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .providers.anthropic_provider import AnthropicProvider
 from .providers.mock_provider import MockProvider
 from .providers.openai_compatible_provider import OpenAICompatibleProvider
 from .providers.base import ProviderResult
@@ -38,6 +39,14 @@ def _format_rows(rows: list[PreflightRow]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _provider_for_slot(slot, base_url: str, api_key: str | None):
+    if slot.provider == "mock" or not api_key:
+        return MockProvider()
+    if slot.provider == "anthropic":
+        return AnthropicProvider(base_url=base_url, api_key=api_key)
+    return OpenAICompatibleProvider(base_url=base_url, api_key=api_key)
+
+
 async def _probe_slot(
     registry: SlotRegistry,
     slot,
@@ -52,7 +61,7 @@ async def _probe_slot(
 
     if not slot.enabled:
         return PreflightRow(slot.id, slot.provider, base_url, fingerprint, model, "disabled", "slot disabled")
-    if slot.provider not in {"openai_compatible", "mock"}:
+    if slot.provider not in {"openai_compatible", "mock", "anthropic"}:
         return PreflightRow(slot.id, slot.provider, base_url, fingerprint, model, "unsupported", "unsupported provider")
     if not base_url and slot.provider != "mock":
         return PreflightRow(slot.id, slot.provider, base_url, fingerprint, model, "missing_base_url", "base_url missing")
@@ -67,10 +76,7 @@ async def _probe_slot(
     if live and slot.provider != "mock" and not api_key:
         return PreflightRow(slot.id, slot.provider, base_url, fingerprint, model, "skipped", "missing key")
 
-    if slot.provider == "mock" or not api_key:
-        provider = MockProvider()
-    else:
-        provider = OpenAICompatibleProvider(base_url=base_url, api_key=api_key)
+    provider = _provider_for_slot(slot, base_url, api_key)
 
     if live:
         try:
@@ -87,7 +93,7 @@ async def _probe_slot(
         if not reply_result.ok:
             return PreflightRow(slot.id, slot.provider, base_url, fingerprint, model, "failed", reply_result.error or "provider_error")
         reply_text = (reply_result.text or "").strip()
-        if reply_text == "OK":
+        if reply_text.strip().strip(".!").upper() == "OK":
             status = "mock_ready" if slot.provider == "mock" or not api_key else "live_ok"
             return PreflightRow(slot.id, slot.provider, base_url, fingerprint, model, status, "ok")
         return PreflightRow(slot.id, slot.provider, base_url, fingerprint, model, "failed", "unexpected response")
@@ -160,12 +166,16 @@ def run_smoke_test(
     if not slots:
         return SmokeTestResult(report_text="status: skipped\nreason: no enabled slots found\n", patch_text="", status="skipped")
 
-    slot = slots[0]
+    if live:
+        keyed_slots = [slot for slot in slots if slot.provider == "mock" or registry.env_value(slot.api_key_env)]
+        if not keyed_slots:
+            return SmokeTestResult(report_text="status: skipped\nreason: missing key\n", patch_text="", status="skipped")
+        slot = keyed_slots[0]
+    else:
+        slot = slots[0]
     base_url = registry.resolve_base_url(slot) or ""
     api_key = registry.env_value(slot.api_key_env)
-    if live and slot.provider != "mock" and not api_key:
-        return SmokeTestResult(report_text="status: skipped\nreason: missing key\n", patch_text="", status="skipped")
-    provider = MockProvider() if slot.provider == "mock" or not api_key else OpenAICompatibleProvider(base_url=base_url, api_key=api_key)
+    provider = _provider_for_slot(slot, base_url, api_key)
     model = requested_model or slot.default_model
 
     async def _ping() -> ProviderResult:
@@ -204,7 +214,7 @@ def run_smoke_test(
     try:
         if live:
             ping_result = asyncio.run(asyncio.wait_for(_ping(), timeout=timeout_seconds))
-            if not ping_result.ok or ping_result.text.strip() != "OK":
+            if not ping_result.ok or ping_result.text.strip().strip(".!").upper() != "OK":
                 reason = ping_result.error or "ping did not return OK"
                 return SmokeTestResult(report_text=f"status: failed\nreason: {reason}\n", patch_text="", status="failed")
             patch_result = asyncio.run(asyncio.wait_for(_patch(), timeout=timeout_seconds))

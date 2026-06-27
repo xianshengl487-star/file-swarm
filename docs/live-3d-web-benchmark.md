@@ -65,7 +65,14 @@ The Mimo endpoint listed:
 mimo-v2.5-pro
 ```
 
-However, a minimal Mimo chat probe returned `ok=True` with empty text, and `file-swarm preflight --live` reported `unexpected response`. Mimo was therefore not used for dispatch.
+At the time of this run, a minimal Mimo `/v1` chat probe returned `ok=True` with empty text, and `file-swarm preflight --live` reported `unexpected response`. Mimo was therefore not used for dispatch in this historical run.
+
+Follow-up hardening changed that failure mode:
+
+- Mimo `/v1` empty text is now `empty_response`, not success.
+- Mimo `/anthropic` is supported directly.
+- `rate_limit`, `timeout`, `connection_error`, `empty_response`, and 429/502/503 errors are failoverable for patch workers.
+- The recommended Mimo order is `/anthropic` first, `/v1` compatibility second.
 
 ## Preflight And Smoke
 
@@ -231,7 +238,7 @@ To get a full 13/13 passing live run:
 3. Disable every slot that is not `live_ok`.
 4. Start with `--parallel 1` or `--parallel 2`.
 5. Re-enable higher parallelism only after smoke and one small task pass.
-6. Do not include Mimo until it returns non-empty chat text in preflight.
+6. Include Mimo `/anthropic` slots after they return `live_ok`; keep Mimo `/v1` as compatibility only because empty text now triggers failover.
 
 Recommended command shape:
 

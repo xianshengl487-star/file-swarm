@@ -127,6 +127,49 @@ Dispatch behavior:
 - One slot cannot serve two workers at the same time.
 - If no slot is free, tasks wait instead of reusing a busy slot.
 
+## NVIDIA To Mimo Failover
+
+Default live coding route:
+
+```text
+1. NVIDIA GLM primary: z-ai/glm-5.1
+2. NVIDIA auxiliary models: Kimi, Qwen, DeepSeek when configured
+3. Mimo Pro super-brain: mimo-v2.5-pro on /anthropic
+4. Mimo multimodal worker: mimo-v2.5 on /anthropic
+5. Mimo /v1 compatibility slot, only if it returns non-empty text
+```
+
+Use these endpoints in `model_slots.yaml`:
+
+```text
+NVIDIA: https://integrate.api.nvidia.com/v1
+Mimo preferred: https://token-plan-cn.xiaomimimo.com/anthropic
+Mimo compatibility: https://token-plan-cn.xiaomimimo.com/v1
+```
+
+Failover is automatic for patch workers when a slot returns:
+
+```text
+rate_limit
+timeout
+connection_error
+empty_response
+api_error_status_429
+api_error_status_502
+api_error_status_503
+```
+
+When this happens:
+
+- Release the failed slot immediately.
+- Exclude that slot from the current task retry.
+- Acquire the next eligible, keyed, preflight-ready slot.
+- Record `slot_failover` in `timeline.jsonl`.
+- Prefer Mimo `/anthropic` over Mimo `/v1`.
+- Treat Mimo `/v1` empty chat text as `empty_response`, not success.
+
+Do not retry side-effecting `agent_worker` tasks on another slot automatically.
+
 ## Showing Which Model Did What
 
 After `auto`, inspect these files:

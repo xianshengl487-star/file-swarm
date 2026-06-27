@@ -63,9 +63,20 @@ class OpenAICompatibleProvider:
             input_tokens = getattr(usage, "prompt_tokens", None) if usage else None
             output_tokens = getattr(usage, "completion_tokens", None) if usage else None
 
+            text = response.choices[0].message.content or ""
+            if not text.strip():
+                return ProviderResult(
+                    ok=False,
+                    error="empty_response",
+                    model=model,
+                    provider="openai_compatible",
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                )
+
             return ProviderResult(
                 ok=True,
-                text=response.choices[0].message.content or "",
+                text=text,
                 model=model,
                 provider="openai_compatible",
                 input_tokens=input_tokens,

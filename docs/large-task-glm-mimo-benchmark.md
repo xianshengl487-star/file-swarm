@@ -10,8 +10,10 @@ Requested live model plan:
 
 | Role | Model | Provider style | Endpoint |
 | --- | --- | --- | --- |
-| Primary | `glm-5.1` | OpenAI-compatible | `https://integrate.api.nvidia.com/v1` |
-| Auxiliary | `mimo-v2.5-pro` | OpenAI-compatible | `https://token-plan-cn.xiaomimimo.com/v1` |
+| Primary | `z-ai/glm-5.1` | OpenAI-compatible | `https://integrate.api.nvidia.com/v1` |
+| Auxiliary | `mimo-v2.5-pro` | Anthropic-compatible | `https://token-plan-cn.xiaomimimo.com/anthropic` |
+| Auxiliary | `mimo-v2.5` | Anthropic-compatible multimodal | `https://token-plan-cn.xiaomimimo.com/anthropic` |
+| Compatibility | `mimo-v2.5-pro` | OpenAI-compatible | `https://token-plan-cn.xiaomimimo.com/v1` |
 
 The local environment did not expose the required key variables:
 

@@ -106,6 +106,17 @@ class AnthropicProvider:
             input_tokens = getattr(usage, "input_tokens", None)
             output_tokens = getattr(usage, "output_tokens", None)
 
+        if not text.strip():
+            return ProviderResult(
+                ok=False,
+                text="",
+                error="empty_response",
+                model=model,
+                provider="anthropic",
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            )
+
         return ProviderResult(
             ok=True,
             text=text,

@@ -1,43 +1,45 @@
 model_routing:
   repo_mapper:
     preferred_models:
+      - mimo-v2.5
       - mimo-v2.5-pro
-      - nvidia-multimodal-1
-      - nvidia-multimodal-2
+      - z-ai/glm-5.1
 
   planner:
     preferred_models:
+      - z-ai/glm-5.1
       - mimo-v2.5-pro
-      - glm-5.1
-      - k2.6
+      - mimo-v2.5
 
   contract_builder:
     preferred_models:
-      - deepseek-v4
-      - glm-5.1
-      - qwen3.5
+      - z-ai/glm-5.1
+      - deepseek-ai/deepseek-v4-pro
+      - mimo-v2.5-pro
 
   task_splitter:
     preferred_models:
-      - qwen3.5
-      - k2.6
-      - glm-5.1
+      - z-ai/glm-5.1
+      - qwen/qwen3.5-122b-a10b
+      - mimo-v2.5-pro
 
   patch_worker:
     preferred_models:
+      - z-ai/glm-5.1
+      - moonshotai/kimi-k2.6
+      - qwen/qwen3.5-122b-a10b
+      - deepseek-ai/deepseek-v4-pro
       - mimo-v2.5-pro
-      - deepseek-v4
-      - glm-5.1
-      - k2.6
+      - mimo-v2.5
 
   review_worker:
     preferred_models:
-      - deepseek-v4
-      - glm-5.1
-      - qwen3.5
+      - deepseek-ai/deepseek-v4-pro
+      - z-ai/glm-5.1
+      - mimo-v2.5-pro
 
   repair_worker:
     preferred_models:
-      - qwen3.5
-      - deepseek-v4
-      - glm-5.1
+      - mimo-v2.5-pro
+      - mimo-v2.5
+      - z-ai/glm-5.1

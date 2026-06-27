@@ -172,7 +172,7 @@ Example:
 
 ```yaml
 model_slots:
-  - id: nvidia_glm
+  - id: nvidia_glm_primary
     provider: openai_compatible
     base_url: https://integrate.api.nvidia.com/v1
     api_key_env: NVIDIA_API_KEY_01
@@ -180,6 +180,26 @@ model_slots:
     allowed_models:
       - z-ai/glm-5.1
     default_model: z-ai/glm-5.1
+    max_concurrent_tasks: 1
+
+  - id: mimo_pro_anthropic
+    provider: anthropic
+    base_url: https://token-plan-cn.xiaomimimo.com/anthropic
+    api_key_env: MIMO_API_KEY_01
+    enabled: true
+    allowed_models:
+      - mimo-v2.5-pro
+    default_model: mimo-v2.5-pro
+    max_concurrent_tasks: 1
+
+  - id: mimo_multimodal_anthropic
+    provider: anthropic
+    base_url: https://token-plan-cn.xiaomimimo.com/anthropic
+    api_key_env: MIMO_API_KEY_01
+    enabled: true
+    allowed_models:
+      - mimo-v2.5
+    default_model: mimo-v2.5
     max_concurrent_tasks: 1
 ```
 
@@ -189,6 +209,13 @@ Lease rules:
 - busy slots are skipped
 - `max_concurrent_tasks` is respected
 - task completion, failure, and timeout release the lease
+
+Failover rules:
+
+- NVIDIA `rate_limit`, timeout, connection errors, and 429/502/503 responses release the slot and retry the task on the next eligible slot
+- Mimo `/anthropic` is preferred for `mimo-v2.5-pro` and `mimo-v2.5`
+- Mimo `/v1` is supported as an OpenAI-compatible slot, but empty chat text is treated as `empty_response`, not success
+- `timeline.jsonl` records `slot_failover` with the failed slot, reason, and remaining candidate slots
 
 ## Run Artifacts
 
@@ -204,7 +231,7 @@ Important files:
 | --- | --- |
 | `file_tasks.json` | planned file-level or agent tasks |
 | `dispatch_report.json` | which slot/model/provider handled each task |
-| `timeline.jsonl` | `slot_acquired`, `worker_started`, `worker_finished`, `slot_released` |
+| `timeline.jsonl` | `slot_acquired`, `worker_started`, `worker_finished`, `slot_released`, `slot_failover` |
 | `transcripts/*.input.md` | exact worker prompts |
 | `transcripts/*.output.md` | exact model responses |
 | `transcripts/*.meta.json` | token, provider, slot, model metadata |
@@ -297,7 +324,7 @@ Full report:
 
 A larger live 3D Web benchmark was also run with NVIDIA `z-ai/glm-5.1`.
 
-Result summary:
+Original result summary:
 
 ```text
 NVIDIA smoke-test: passed
@@ -308,6 +335,8 @@ main bottleneck: NVIDIA rate_limit during 13-task retry
 ```
 
 The run was intentionally not marked as a fake success. It exposed real limits and produced planner/validator fixes.
+
+Follow-up hardening now treats Mimo `/v1` empty chat text as `empty_response`, supports Mimo `/anthropic`, and automatically fails over from NVIDIA rate-limit errors to Mimo Pro or Mimo v2.5 when those slots pass preflight.
 
 Full report:
 

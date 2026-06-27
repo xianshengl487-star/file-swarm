@@ -1,73 +1,77 @@
 model_slots:
-  - id: mimo_slot_01
+  # Primary live coding model. NVIDIA may return 429/rate_limit under burst load;
+  # dispatcher failover will then try the Mimo slots below.
+  - id: nvidia_glm_primary
+    provider: openai_compatible
+    base_url: https://integrate.api.nvidia.com/v1
+    api_key_env: NVIDIA_API_KEY_01
+    enabled: true
+    allowed_models:
+      - z-ai/glm-5.1
+    default_model: z-ai/glm-5.1
+    max_concurrent_tasks: 1
+
+  - id: nvidia_kimi_aux
+    provider: openai_compatible
+    base_url: https://integrate.api.nvidia.com/v1
+    api_key_env: NVIDIA_API_KEY_02
+    enabled: true
+    allowed_models:
+      - moonshotai/kimi-k2.6
+    default_model: moonshotai/kimi-k2.6
+    max_concurrent_tasks: 1
+
+  - id: nvidia_qwen_aux
+    provider: openai_compatible
+    base_url: https://integrate.api.nvidia.com/v1
+    api_key_env: NVIDIA_API_KEY_03
+    enabled: true
+    allowed_models:
+      - qwen/qwen3.5-122b-a10b
+    default_model: qwen/qwen3.5-122b-a10b
+    max_concurrent_tasks: 1
+
+  - id: nvidia_deepseek_aux
+    provider: openai_compatible
+    base_url: https://integrate.api.nvidia.com/v1
+    api_key_env: NVIDIA_API_KEY_04
+    enabled: true
+    allowed_models:
+      - deepseek-ai/deepseek-v4-pro
+    default_model: deepseek-ai/deepseek-v4-pro
+    max_concurrent_tasks: 1
+
+  # Preferred Mimo endpoint. Use this before /v1 because some /v1 proxies may
+  # return an empty chat body; empty_response is now treated as failoverable.
+  - id: mimo_pro_anthropic
+    provider: anthropic
+    base_url: https://token-plan-cn.xiaomimimo.com/anthropic
+    api_key_env: MIMO_API_KEY_01
+    enabled: true
+    allowed_models:
+      - mimo-v2.5-pro
+    default_model: mimo-v2.5-pro
+    max_concurrent_tasks: 1
+
+  - id: mimo_multimodal_anthropic
+    provider: anthropic
+    base_url: https://token-plan-cn.xiaomimimo.com/anthropic
+    api_key_env: MIMO_API_KEY_01
+    enabled: true
+    allowed_models:
+      - mimo-v2.5
+    default_model: mimo-v2.5
+    max_concurrent_tasks: 1
+
+  # Compatibility endpoint. Kept enabled so preflight can expose whether /v1
+  # works in the current environment; dispatcher will skip to /anthropic when
+  # /v1 returns empty_response, timeout, connection_error, or rate_limit.
+  - id: mimo_pro_openai_compat
     provider: openai_compatible
     base_url: https://token-plan-cn.xiaomimimo.com/v1
     api_key_env: MIMO_API_KEY_01
     enabled: true
     allowed_models:
       - mimo-v2.5-pro
-      - mimo-v2.5
     default_model: mimo-v2.5-pro
-    max_concurrent_tasks: 1
-
-  - id: nvidia_text_slot_01
-    provider: openai_compatible
-    base_url: https://integrate.api.nvidia.com/v1
-    api_key_env: NVIDIA_API_KEY_01
-    enabled: true
-    allowed_models:
-      - glm-5.1
-    default_model: glm-5.1
-    max_concurrent_tasks: 1
-
-  - id: nvidia_text_slot_02
-    provider: openai_compatible
-    base_url: https://integrate.api.nvidia.com/v1
-    api_key_env: NVIDIA_API_KEY_02
-    enabled: true
-    allowed_models:
-      - k2.6
-    default_model: k2.6
-    max_concurrent_tasks: 1
-
-  - id: nvidia_text_slot_03
-    provider: openai_compatible
-    base_url: https://integrate.api.nvidia.com/v1
-    api_key_env: NVIDIA_API_KEY_03
-    enabled: true
-    allowed_models:
-      - qwen3.5
-    default_model: qwen3.5
-    max_concurrent_tasks: 1
-
-  - id: nvidia_text_slot_04
-    provider: openai_compatible
-    base_url: https://integrate.api.nvidia.com/v1
-    api_key_env: NVIDIA_API_KEY_04
-    enabled: true
-    allowed_models:
-      - deepseek-v4
-    default_model: deepseek-v4
-    max_concurrent_tasks: 1
-
-  - id: nvidia_mm_slot_05
-    provider: openai_compatible
-    base_url: https://integrate.api.nvidia.com/v1
-    api_key_env: NVIDIA_API_KEY_05
-    enabled: true
-    allowed_models:
-      - nvidia-multimodal-1
-      - multimodal-1
-    default_model: nvidia-multimodal-1
-    max_concurrent_tasks: 1
-
-  - id: nvidia_mm_slot_06
-    provider: openai_compatible
-    base_url: https://integrate.api.nvidia.com/v1
-    api_key_env: NVIDIA_API_KEY_06
-    enabled: true
-    allowed_models:
-      - nvidia-multimodal-2
-      - multimodal-2
-    default_model: nvidia-multimodal-2
     max_concurrent_tasks: 1
