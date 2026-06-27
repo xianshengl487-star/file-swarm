@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Iterable
 
 from .patch_merger import _extract_diff_block
+
+
+_HUNK_HEADER = re.compile(r"^@@ -(\d+),?(\d*) \+(\d+),?(\d*) @@")
 
 
 def _parse_hunks(patch_text: str) -> list[tuple[str, str, list[str]]]:
@@ -57,6 +61,14 @@ def _apply_file_patch(repo_root: Path, old_path: str, new_path: str, hunks: list
         if not header.startswith("@@ "):
             hunk_index += 1
             continue
+        match = _HUNK_HEADER.match(header)
+        if not match:
+            raise ValueError(f"invalid hunk header for {target_rel}")
+        hunk_start = max(int(match.group(1)) - 1, 0)
+        if hunk_start < source_index:
+            raise ValueError(f"overlapping hunk for {target_rel}")
+        result_lines.extend(original_lines[source_index:hunk_start])
+        source_index = hunk_start
         hunk_index += 1
         while hunk_index < len(hunks) and not hunks[hunk_index].startswith("@@ "):
             diff_line = hunks[hunk_index]

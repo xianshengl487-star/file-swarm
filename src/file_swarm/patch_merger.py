@@ -42,6 +42,10 @@ def _extract_diff_block(text: str) -> str:
     2.  Bare:     ``` without language tag, then diff lines, then ```
     3.  Unfenced: plain diff lines mixed with markdown (Mimo, some GLMs)
     """
+    stripped = text.lstrip()
+    if stripped.startswith(("--- ", "diff --git ")):
+        return stripped.rstrip() + "\n"
+
     if "```diff" in text:
         # Style 1 – explicit diff fence
         block = text.split("```diff", 1)[1]

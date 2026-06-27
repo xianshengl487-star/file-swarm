@@ -148,7 +148,14 @@ def _fix_hunk_counts(text: str) -> tuple[str, int]:
 
 def _normalize_whitespace(text: str) -> str:
     """Strip trailing whitespace, trim leading/trailing blank lines."""
-    lines = [line.rstrip() for line in text.splitlines()]
+    lines: list[str] = []
+    for line in text.splitlines():
+        # A blank context line in unified diff is represented as a single
+        # leading space. Stripping it turns a valid hunk into an invalid one.
+        if line == " ":
+            lines.append(line)
+        else:
+            lines.append(line.rstrip())
     while lines and not lines[0].strip():
         lines.pop(0)
     while lines and not lines[-1].strip():

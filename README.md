@@ -124,7 +124,7 @@ python -m pytest -q
 Expected current test status:
 
 ```text
-38 passed
+41 passed
 ```
 
 ## Quick Start
@@ -265,6 +265,33 @@ Conclusion:
 Full report:
 
 [docs/swarm-vs-codex-comparison.md](docs/swarm-vs-codex-comparison.md)
+
+## Large Task GLM/Mimo Benchmark
+
+I also ran a larger 8-module task using the latest skill flow. The requested live GLM/Mimo keys were not present in the local environment, so the run did not fake live API usage. Instead, it used deterministic mock slots named after the requested models:
+
+| Role | Slot | Model | Files handled |
+| --- | --- | --- | --- |
+| Primary | `mock_glm_primary` | `glm-5.1` | 3 |
+| Auxiliary | `mock_mimo_aux_01` | `mimo-v2.5-pro` | 3 |
+| Auxiliary | `mock_mimo_aux_02` | `mimo-v2.5-pro` | 2 |
+
+Result:
+
+```text
+run_id: 20260627042257146410
+tasks: 8/8 passed
+guard: 8 passed, 0 rejected
+implementation completeness: 8/8 source modules
+pytest: 1 passed
+recommend_apply: yes
+```
+
+Direct Codex editing was faster on the same mechanical task (`0.046s` vs `1.159s`) but did not provide slot leases, transcripts, Patch Guard, `final.patch`, or `codex_summary.md`.
+
+Full report:
+
+[docs/large-task-glm-mimo-benchmark.md](docs/large-task-glm-mimo-benchmark.md)
 
 ## Agent Dry-Run Result
 
